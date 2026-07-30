@@ -7,28 +7,27 @@ from collections import defaultdict
 from flask import Flask
 from pyrogram import Client, filters
 
-# ---------- Environment Variables ----------
+# ---------- ENVIRONMENT VARIABLES ----------
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
-# ---------- Rate Limiting Setup ----------
+# ---------- RATE LIMITING ----------
 user_last_command = defaultdict(float)
 
 def rate_limit(user_id, cooldown=3):
-    """3 seconds cooldown between commands"""
     current_time = time.time()
     if current_time - user_last_command[user_id] < cooldown:
         return False
     user_last_command[user_id] = current_time
     return True
 
-# ---------- Flask App ----------
+# ---------- FLASK APP ----------
 server = Flask(__name__)
 
-# ---------- Config Store ----------
+# ---------- CONFIG ----------
 spam_config = {
     "chat_id": None,
     "message": "Hello from Userbot! 🚀",
@@ -36,73 +35,62 @@ spam_config = {
     "is_running": False
 }
 
-# ---------- Clients ----------
+# ---------- CLIENTS ----------
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("user_account", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 
-# ---------- Logger Function ----------
+# ---------- LOGGER ----------
 def log_command(user_id, command):
-    """Log all commands to file"""
     try:
         with open("command_logs.txt", "a") as f:
             f.write(f"{datetime.now()} | User: {user_id} | Command: {command}\n")
     except:
         pass
 
-# ---------- Spam Worker ----------
+# ---------- SPAM WORKER ----------
 async def spam_worker():
-    """Background loop jo lagatar check karega aur message bhejega"""
     while True:
         if spam_config["is_running"] and spam_config["chat_id"]:
             try:
                 await user.send_message(spam_config["chat_id"], spam_config["message"])
-                print(f"[+] User account sent message to {spam_config['chat_id']}")
+                print(f"[+] Message sent to {spam_config['chat_id']}")
             except Exception as e:
-                print(f"[-] Spam Error: {e}")
-            
+                print(f"[-] Error: {e}")
             await asyncio.sleep(spam_config["interval"])
         else:
             await asyncio.sleep(1)
 
-# ---------- Owner Only Decorator ----------
+# ---------- OWNER ONLY DECORATOR ----------
 def owner_only(func):
-    """Custom decorator for owner-only commands with extra security"""
     async def wrapper(client, message):
-        # Check 1: Only owner
         if message.from_user.id != OWNER_ID:
-            await message.reply("❌ You are not authorized to use this bot!")
+            await message.reply("❌ Unauthorized!")
             return
-        
-        # Check 2: Only private chat
         if message.chat.type != "private":
-            await message.reply("❌ Use this bot in private chat only!")
+            await message.reply("❌ Private chat only!")
             return
-        
-        # Check 3: Rate limit
         if not rate_limit(message.from_user.id):
-            await message.reply("⏳ Slow down! Wait 3 seconds between commands.")
+            await message.reply("⏳ Slow down! Wait 3 seconds.")
             return
-        
-        # Log the command
         log_command(message.from_user.id, message.text)
-        
         return await func(client, message)
     return wrapper
 
-# ---------- Bot Commands ----------
+# ---------- BOT COMMANDS ----------
 @bot.on_message(filters.command(["start", "help"]))
 @owner_only
 async def start_command(client, message):
     help_text = (
-        "🤖 Userbot Controller Active!\n\n"
-        "📌 Commands:\n"
-        "/setgroup <ID/Username/Link> - Target group set karein\n"
-        "/setmsg <text> - Prank text set karein\n"
-        "/settime <seconds> - Time interval set karein\n"
-        "/status - Current configuration dekhein\n"
-        "/start_spam - Spamming shuru karein\n"
-        "/stop_spam - Spamming rok dein\n\n"
-        "🔐 Only authorized owner can use this bot!"
+        "🤖 USERBOT CONTROLLER\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "/setgroup @username - Target group\n"
+        "/setmsg Your text - Message set\n"
+        "/settime 30 - Interval (min 10s)\n"
+        "/status - Check config\n"
+        "/start_spam - Start spamming\n"
+        "/stop_spam - Stop spamming\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "🔐 Only owner can use this bot!"
     )
     await message.reply_text(help_text)
 
@@ -115,93 +103,90 @@ async def set_group(client, message):
             group = group.split("t.me/")[1]
         if not group.startswith("@"):
             group = f"@{group}"
-        
         spam_config["chat_id"] = group
-        await message.reply_text(f"✅ Target Group Set: `{group}`")
-    except IndexError:
-        await message.reply_text("❌ Format: `/setgroup @groupusername` ya `/setgroup -100xxxxxxx`")
+        await message.reply_text(f"✅ Target group set: `{group}`")
+    except:
+        await message.reply_text("❌ Format: /setgroup @username")
 
 @bot.on_message(filters.command("setmsg"))
 @owner_only
 async def set_msg(client, message):
     try:
-        msg_text = message.text.split(maxsplit=1)[1]
-        spam_config["message"] = msg_text
-        await message.reply_text(f"✅ Message text set to:\n{msg_text}")
-    except IndexError:
-        await message.reply_text("❌ Format: /setmsg Tera text yahan")
+        msg = message.text.split(maxsplit=1)[1]
+        spam_config["message"] = msg
+        await message.reply_text(f"✅ Message set:\n`{msg}`")
+    except:
+        await message.reply_text("❌ Format: /setmsg Your text here")
 
 @bot.on_message(filters.command("settime"))
 @owner_only
 async def set_time(client, message):
     try:
-        seconds = int(message.text.split(maxsplit=1)[1])
-        if seconds < 10:
-            await message.reply_text("⚠️ Account safety ke liye minimal 10 seconds rakhein.")
+        sec = int(message.text.split(maxsplit=1)[1])
+        if sec < 10:
+            await message.reply_text("⚠️ Minimum 10 seconds required!")
             return
-        spam_config["interval"] = seconds
-        await message.reply_text(f"✅ Interval Set: {seconds} seconds")
-    except (IndexError, ValueError):
+        spam_config["interval"] = sec
+        await message.reply_text(f"✅ Interval set: {sec} seconds")
+    except:
         await message.reply_text("❌ Format: /settime 30")
 
 @bot.on_message(filters.command("status"))
 @owner_only
 async def status(client, message):
-    status_msg = (
-        f"📊 Current Status:\n"
-        f"━━━━━━━━━━━━━━━\n"
+    status_text = (
+        f"📊 CURRENT STATUS\n"
+        f"━━━━━━━━━━━━━━━━\n"
         f"Target Chat: `{spam_config['chat_id']}`\n"
         f"Message: `{spam_config['message']}`\n"
         f"Interval: `{spam_config['interval']}s`\n"
         f"Running: `{'✅ YES' if spam_config['is_running'] else '❌ NO'}`\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"Owner: `{OWNER_ID}`"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"Owner ID: `{OWNER_ID}`"
     )
-    await message.reply_text(status_msg)
+    await message.reply_text(status_text)
 
 @bot.on_message(filters.command("start_spam"))
 @owner_only
 async def start_spam(client, message):
     if not spam_config["chat_id"]:
-        await message.reply_text("❌ Pehle /setgroup set karo!")
+        await message.reply_text("❌ First set group using /setgroup")
         return
-    
     if not spam_config["is_running"]:
         spam_config["is_running"] = True
-        await message.reply_text("🚀 Tumhare account se background spamming shuru ho chuki hai!")
+        await message.reply_text("🚀 Spamming started successfully!")
     else:
-        await message.reply_text("⚠️ Spammer pehle se hi chal raha hai.")
+        await message.reply_text("⚠️ Spam already running!")
 
 @bot.on_message(filters.command("stop_spam"))
 @owner_only
 async def stop_spam(client, message):
     if spam_config["is_running"]:
         spam_config["is_running"] = False
-        await message.reply_text("🛑 Spamming rok di gayi hai.")
+        await message.reply_text("🛑 Spamming stopped!")
     else:
-        await message.reply_text("⚠️ Spammer band hi hai.")
+        await message.reply_text("⚠️ Spam is not running!")
 
-# ---------- Extra Security: Block All Other Users ----------
+# ---------- BLOCK OTHERS ----------
 @bot.on_message(filters.command(["setgroup", "setmsg", "settime", "status", "start_spam", "stop_spam"]))
 async def block_others(client, message):
-    """Agar koi aur command use kare to block karo"""
     if message.from_user.id != OWNER_ID:
         await message.reply_text("🔒 You are not authorized to use this bot!")
 
-# ---------- Flask Routes ----------
+# ---------- FLASK ROUTES ----------
 @server.route('/')
 def home():
-    return "Userbot Controller is running fine! 🚀", 200
+    return "Userbot is running! 🚀", 200
 
 @server.route('/health')
 def health():
     return "OK", 200
 
-# ---------- Main Function ----------
+# ---------- MAIN ----------
 async def main():
     await bot.start()
     await user.start()
-    print("🤖 Bot and 👤 User Client both started successfully!")
+    print("✅ Bot and User client started successfully!")
     print(f"🔐 Owner ID: {OWNER_ID}")
     print("📝 Logging enabled: command_logs.txt")
     
@@ -214,7 +199,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 5000))
     server.run(host='0.0.0.0', port=port, use_reloader=False, debug=False)
 
-# ---------- Entry Point ----------
+# ---------- ENTRY POINT ----------
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())

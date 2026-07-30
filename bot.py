@@ -1,4 +1,10 @@
 import asyncio
+
+# --- Naye Python (3.10+) ka event loop clash fix ---
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+# ----------------------------------------------------
+
 import os
 import threading
 from flask import Flask
@@ -27,16 +33,21 @@ bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 user = Client("user_account", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 
 async def spam_worker():
-    """Background loop jo tumhare account se message bhejega"""
-    while spam_config["is_running"]:
-        if spam_config["chat_id"]:
+    """Background loop jo lagatar check karega aur message bhejega"""
+    while True:
+        if spam_config["is_running"] and spam_config["chat_id"]:
             try:
                 # 'user' client ka use karke tumhare account se message jayega
                 await user.send_message(spam_config["chat_id"], spam_config["message"])
                 print(f"[+] User account sent message to {spam_config['chat_id']}")
             except Exception as e:
                 print(f"[-] Spam Error: {e}")
-        await asyncio.sleep(spam_config["interval"])
+            
+            # Message bhejne ke baad interval tak wait karega
+            await asyncio.sleep(spam_config["interval"])
+        else:
+            # Agar spammer stop hai, toh idle wait karega
+            await asyncio.sleep(1)
 
 @bot.on_message(filters.command(["start", "help"]) & filters.user(OWNER_ID))
 async def start_command(client, message):
@@ -107,8 +118,6 @@ async def start_spam(client, message):
     
     if not spam_config["is_running"]:
         spam_config["is_running"] = True
-        # Async background task loop shuru karein
-        asyncio.create_task(spam_worker())
         await message.reply_text("🚀 Tumhare account se background spamming shuru ho chuki hai!")
     else:
         await message.reply_text("⚠️ Spammer pehle se hi chal raha hai.")
@@ -131,7 +140,10 @@ async def main():
     await user.start()
     print("🤖 Bot and 👤 User Client both started successfully!")
     
-    # Loop running rakhne ke liye
+    # Background spam task ko start karke chhod denge
+    asyncio.create_task(spam_worker())
+    
+    # Loop running rakhne ke liye idle wait
     await asyncio.Event().wait()
 
 def run_flask():
@@ -142,6 +154,6 @@ if __name__ == "__main__":
     # Flask ko separate thread me run karenge taaki Render port active rahe
     threading.Thread(target=run_flask, daemon=True).start()
     
-    # Main Asyncio loop chalao Pyrogram ke liye
-    loop = asyncio.get_event_loop()
+    # Main Asyncio loop chalao (wahi set kiya hua naya loop)
     loop.run_until_complete(main())
+    

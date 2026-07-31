@@ -2,15 +2,9 @@ import asyncio
 import os
 import threading
 import sys
-import re
 from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, UserNotParticipant
-
-# 🔥 Telethon support - In-memory session
-from telethon import TelegramClient
-from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession
 
 # ---------- PYTHON 3.14 FIX ----------
 if sys.version_info >= (3, 14):
@@ -28,11 +22,8 @@ API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
-# 🔥 Pyrogram Sessions
-PYROGRAM_SESSIONS = os.getenv("PYROGRAM_SESSIONS", "").split(',')
-
-# 🔥 Telethon Sessions (String sessions)
-TELETHON_SESSIONS = os.getenv("TELETHON_SESSIONS", "").split(',')
+# 🔥 Multiple Sessions (comma separated)
+SESSION_STRINGS = os.getenv("SESSION_STRINGS", "").split(',')
 
 # Flask app
 server = Flask(__name__)
@@ -46,32 +37,17 @@ spam_config = {
 }
 
 # ---------- CLIENTS ----------
-# Bot (Pyrogram)
+# Bot
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# 🔥 Pyrogram User Clients
-pyro_clients = []
-for i, session in enumerate(PYROGRAM_SESSIONS):
+# 🔥 Multiple User Clients (Pyrogram)
+user_clients = []
+for i, session in enumerate(SESSION_STRINGS):
     session = session.strip()
     if session:
-        pyro_clients.append({
-            "type": "pyrogram",
-            "client": Client(f"pyro_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session)
-        })
-
-# 🔥 Telethon User Clients - In-Memory Sessions
-tele_clients = []
-for i, session in enumerate(TELETHON_SESSIONS):
-    session = session.strip()
-    if session:
-        try:
-            # 🔥 StringSession use karo - file nahi banegi
-            tele_clients.append({
-                "type": "telethon",
-                "client": TelegramClient(StringSession(session), API_ID, API_HASH)
-            })
-        except Exception as e:
-            print(f"[-] Telethon session error: {e}")
+        user_clients.append(
+            Client(f"user_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session)
+        )
 
 # ---------- HELPERS ----------
 def parse_group(group_input):
@@ -85,51 +61,29 @@ def parse_group(group_input):
         group_input = f"@{group_input}"
     return group_input
 
-async def send_message_pyrogram(client, group, message):
-    try:
-        await client.send_message(group, message)
-        return True
-    except Exception as e:
-        print(f"[-] Pyrogram Error: {e}")
-        return False
-
-async def send_message_telethon(client, group, message):
-    try:
-        await client.send_message(group, message)
-        return True
-    except Exception as e:
-        print(f"[-] Telethon Error: {e}")
-        return False
-
 # ---------- SPAM WORKER ----------
 async def spam_worker():
     while True:
-        if spam_config["is_running"] and spam_config["groups"]:
+        if spam_config["is_running"] and spam_config["groups"] and user_clients:
             for group in spam_config["groups"]:
-                # 🔥 Pyrogram clients
-                for item in pyro_clients:
+                for user_client in user_clients:
                     try:
-                        await send_message_pyrogram(item["client"], group, spam_config["message"])
-                        print(f"[+] Pyrogram: Message sent to {group}")
+                        await user_client.send_message(group, spam_config["message"])
+                        print(f"[+] Message sent to {group}")
                     except FloodWait as e:
                         wait = e.value + 10
-                        print(f"[!] Pyrogram Flood wait! {wait}s")
+                        print(f"[!] Flood wait! {wait}s")
                         await asyncio.sleep(wait)
+                    except UserNotParticipant:
+                        print(f"[!] Not in group: {group}")
+                        try:
+                            await user_client.join_chat(group)
+                            print(f"[+] Joined: {group}")
+                        except:
+                            pass
                     except Exception as e:
-                        print(f"[-] Pyrogram Error: {e}")
-                    await asyncio.sleep(2)
-                
-                # 🔥 Telethon clients
-                for item in tele_clients:
-                    try:
-                        await send_message_telethon(item["client"], group, spam_config["message"])
-                        print(f"[+] Telethon: Message sent to {group}")
-                    except FloodWaitError as e:
-                        wait = e.seconds + 10
-                        print(f"[!] Telethon Flood wait! {wait}s")
-                        await asyncio.sleep(wait)
-                    except Exception as e:
-                        print(f"[-] Telethon Error: {e}")
+                        print(f"[-] Error: {e}")
+                    
                     await asyncio.sleep(2)
                 
                 await asyncio.sleep(3)
@@ -141,12 +95,10 @@ async def spam_worker():
 # ---------- BOT COMMANDS ----------
 @bot.on_message(filters.command(["start", "help"]))
 async def start_command(client, message):
-    total_accounts = len(pyro_clients) + len(tele_clients)
     help_text = (
         "🤖 **Userbot Controller**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 Pyrogram: `{len(pyro_clients)}`\n"
-        f"👤 Telethon: `{len(tele_clients)}`\n"
+        f"👤 Accounts: `{len(user_clients)}`\n"
         f"📊 Groups: `{len(spam_config['groups'])}`\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📌 **Group Commands:**\n"
@@ -243,13 +195,10 @@ async def set_time(client, message):
 
 @bot.on_message(filters.command("status"))
 async def status(client, message):
-    total_accounts = len(pyro_clients) + len(tele_clients)
     status_text = (
         f"📊 **Current Status**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Pyrogram Accounts: `{len(pyro_clients)}`\n"
-        f"Telethon Accounts: `{len(tele_clients)}`\n"
-        f"Total Accounts: `{total_accounts}`\n"
+        f"Accounts: `{len(user_clients)}`\n"
         f"Groups: `{len(spam_config['groups'])}`\n"
         f"Message: `{spam_config['message']}`\n"
         f"Interval: `{spam_config['interval']}s`\n"
@@ -263,9 +212,8 @@ async def start_spam(client, message):
         await message.reply_text("❌ **No groups!** Use `/addgroup @username`")
         return
     
-    total_accounts = len(pyro_clients) + len(tele_clients)
-    if total_accounts == 0:
-        await message.reply_text("❌ **No accounts!** Add sessions in environment variables")
+    if not user_clients:
+        await message.reply_text("❌ **No accounts!** Add SESSION_STRINGS")
         return
     
     if not spam_config["is_running"]:
@@ -274,7 +222,7 @@ async def start_spam(client, message):
             f"🚀 **Spamming Started!**\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 Groups: `{len(spam_config['groups'])}`\n"
-            f"👤 Total Accounts: `{total_accounts}`\n"
+            f"👤 Accounts: `{len(user_clients)}`\n"
             f"⏱️ Interval: `{spam_config['interval']}s`\n"
             f"💬 Message: `{spam_config['message']}`"
         )
@@ -300,27 +248,15 @@ async def main():
     await bot.start()
     print("✅ Bot started!")
     
-    # 🔥 Start Pyrogram clients
-    print("👤 Starting Pyrogram accounts...")
-    for item in pyro_clients:
+    print("👤 Starting user accounts...")
+    for client in user_clients:
         try:
-            await item["client"].start()
-            print("✅ Pyrogram account started!")
+            await client.start()
+            print("✅ User account started!")
         except Exception as e:
-            print(f"❌ Pyrogram failed: {e}")
+            print(f"❌ Failed: {e}")
     
-    # 🔥 Start Telethon clients
-    print("👤 Starting Telethon accounts...")
-    for item in tele_clients:
-        try:
-            await item["client"].start()
-            print("✅ Telethon account started!")
-        except Exception as e:
-            print(f"❌ Telethon failed: {e}")
-    
-    total = len(pyro_clients) + len(tele_clients)
-    print(f"📊 Total accounts: {total}")
-    
+    print(f"📊 Total accounts: {len(user_clients)}")
     asyncio.create_task(spam_worker())
     
     while True:

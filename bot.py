@@ -1,26 +1,31 @@
 import asyncio
 import os
 import threading
+import sys
 from flask import Flask
 from pyrogram import Client, filters
 
-# --- Naye Python (3.10+) ka event loop clash fix ---
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-# ----------------------------------------------------
+# ---------- PYTHON 3.14 FIX ----------
+if sys.version_info >= (3, 14):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+else:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-# Environments variables (Render pe set karenge)
+# ---------- ENV VARIABLES ----------
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 
-# 🔥 Sabhi users ke liye open - No owner check!
-
-# Flask app to keep Render alive
+# Flask app
 server = Flask(__name__)
 
-# Config stores
+# Config
 spam_config = {
     "chat_id": None,
     "message": "Hello from Userbot! 🚀",
@@ -28,39 +33,36 @@ spam_config = {
     "is_running": False
 }
 
-# Clients initialization
+# Clients
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("user_account", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 
+# ---------- SPAM WORKER ----------
 async def spam_worker():
-    """Background loop jo lagatar check karega aur message bhejega"""
     while True:
         if spam_config["is_running"] and spam_config["chat_id"]:
             try:
                 await user.send_message(spam_config["chat_id"], spam_config["message"])
-                print(f"[+] User account sent message to {spam_config['chat_id']}")
+                print(f"[+] Message sent to {spam_config['chat_id']}")
             except Exception as e:
-                print(f"[-] Spam Error: {e}")
-            
+                print(f"[-] Error: {e}")
             await asyncio.sleep(spam_config["interval"])
         else:
             await asyncio.sleep(1)
 
-# 🔥 NO OWNER CHECK - Sabhi users ke liye open
+# ---------- BOT COMMANDS (No Owner Check) ----------
 @bot.on_message(filters.command(["start", "help"]))
 async def start_command(client, message):
-    help_text = (
-        "🤖 **Userbot Controller Active!**\n\n"
-        "Commands:\n"
-        "/setgroup <ID/Username/Link> - Target group set karein\n"
-        "/setmsg <text> - Prank text set karein\n"
-        "/settime <seconds> - Time interval\n"
-        "/status - Current configuration\n"
-        "/start_spam - Account se spamming shuru karein\n"
-        "/stop_spam - Spamming rokne ke liye\n\n"
-        "🔓 This bot is open for everyone!"
+    await message.reply_text(
+        "🤖 **Userbot Controller**\n\n"
+        "/setgroup @username - Set target group\n"
+        "/setmsg Your text - Set message\n"
+        "/settime 30 - Set interval (min 10s)\n"
+        "/status - Check config\n"
+        "/start_spam - Start spamming\n"
+        "/stop_spam - Stop spamming\n\n"
+        "🔓 Open for everyone!"
     )
-    await message.reply_text(help_text)
 
 @bot.on_message(filters.command("setgroup"))
 async def set_group(client, message):
@@ -70,73 +72,73 @@ async def set_group(client, message):
             group = group.split("t.me/")[1]
         if not group.startswith("@"):
             group = f"@{group}"
-        
         spam_config["chat_id"] = group
-        await message.reply_text(f"✅ Target Group Set: `{group}`")
-    except IndexError:
-        await message.reply_text("❌ Format: `/setgroup @groupusername` ya `/setgroup -100xxxxxxx`")
+        await message.reply_text(f"✅ Target: `{group}`")
+    except:
+        await message.reply_text("❌ /setgroup @username")
 
 @bot.on_message(filters.command("setmsg"))
 async def set_msg(client, message):
     try:
-        msg_text = message.text.split(maxsplit=1)[1]
-        spam_config["message"] = msg_text
-        await message.reply_text(f"✅ Message text set to:\n`{msg_text}`")
-    except IndexError:
-        await message.reply_text("❌ Format: `/setmsg Tera text yahan`")
+        msg = message.text.split(maxsplit=1)[1]
+        spam_config["message"] = msg
+        await message.reply_text(f"✅ Message: `{msg}`")
+    except:
+        await message.reply_text("❌ /setmsg Your text")
 
 @bot.on_message(filters.command("settime"))
 async def set_time(client, message):
     try:
-        seconds = int(message.text.split(maxsplit=1)[1])
-        if seconds < 10:
-            await message.reply_text("⚠️ Account safety ke liye minimal 10 seconds rakhein.")
+        sec = int(message.text.split(maxsplit=1)[1])
+        if sec < 10:
+            await message.reply_text("⚠️ Min 10 seconds")
             return
-        spam_config["interval"] = seconds
-        await message.reply_text(f"✅ Interval Set: {seconds} seconds")
-    except (IndexError, ValueError):
-        await message.reply_text("❌ Format: `/settime 30`")
+        spam_config["interval"] = sec
+        await message.reply_text(f"✅ Interval: {sec}s")
+    except:
+        await message.reply_text("❌ /settime 30")
 
 @bot.on_message(filters.command("status"))
 async def status(client, message):
-    status_msg = (
-        f"📊 **Current Status:**\n"
-        f"Target Chat: `{spam_config['chat_id']}`\n"
+    await message.reply_text(
+        f"📊 **Status**\n"
+        f"Target: `{spam_config['chat_id']}`\n"
         f"Message: `{spam_config['message']}`\n"
         f"Interval: `{spam_config['interval']}s`\n"
-        f"Running: `{'YES' if spam_config['is_running'] else 'NO'}`"
+        f"Running: `{'✅' if spam_config['is_running'] else '❌'}`"
     )
-    await message.reply_text(status_msg)
 
 @bot.on_message(filters.command("start_spam"))
 async def start_spam(client, message):
     if not spam_config["chat_id"]:
-        await message.reply_text("❌ Pehle /setgroup set karo!")
+        await message.reply_text("❌ Set group first!")
         return
-    
     if not spam_config["is_running"]:
         spam_config["is_running"] = True
-        await message.reply_text("🚀 Tumhare account se background spamming shuru ho chuki hai!")
+        await message.reply_text("🚀 Spamming started!")
     else:
-        await message.reply_text("⚠️ Spammer pehle se hi chal raha hai.")
+        await message.reply_text("⚠️ Already running!")
 
 @bot.on_message(filters.command("stop_spam"))
 async def stop_spam(client, message):
     if spam_config["is_running"]:
         spam_config["is_running"] = False
-        await message.reply_text("🛑 Spamming rok di gayi hai.")
+        await message.reply_text("🛑 Stopped!")
     else:
-        await message.reply_text("⚠️ Spammer band hi hai.")
+        await message.reply_text("⚠️ Not running!")
 
+# ---------- FLASK ----------
 @server.route('/')
 def home():
-    return "Userbot Controller is running fine!", 200
+    return "Userbot is running! 🚀", 200
 
+# ---------- MAIN ----------
 async def main():
+    print("Starting bot...")
     await bot.start()
+    print("✅ Bot started!")
     await user.start()
-    print("🤖 Bot and 👤 User Client both started successfully!")
-    print("🔓 Bot is open for everyone!")
+    print("✅ User client started!")
     
     asyncio.create_task(spam_worker())
     
@@ -147,6 +149,13 @@ def run_flask():
     port = int(os.environ.get("PORT", 5000))
     server.run(host='0.0.0.0', port=port, use_reloader=False, debug=False)
 
+# ---------- ENTRY ----------
 if __name__ == "__main__":
+    # Flask thread
     threading.Thread(target=run_flask, daemon=True).start()
-    loop.run_until_complete(main())
+    
+    # Asyncio run
+    try:
+        loop.run_until_complete(main())
+    except Exception as e:
+        print(f"Error: {e}")

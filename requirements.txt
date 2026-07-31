@@ -1,3 +1,4 @@
 pyrogram==2.0.106
-flask==3.0.0
-requests==2.31.0
+tgcrypto==1.2.5
+telethon==1.36.0
+flask==2.3.3

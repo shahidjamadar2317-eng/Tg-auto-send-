@@ -1,241 +1,141 @@
-import asyncio
-import os
-import threading
-import sys
-from flask import Flask
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait
+import asyncio
+import time
+import threading
+from flask import Flask
+import requests
+import logging
 
-# ---------- PYTHON 3.14 FIX ----------
-if sys.version_info >= (3, 14):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-else:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# ============ CONFIGURATION ============
+API_ID = 123456  # Apna API ID daalein
+API_HASH = "your_api_hash_here"  # Apna API Hash
+BOT_TOKEN = "your_bot_token_here"  # Apna Bot Token
 
-# ---------- ENV VARIABLES ----------
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-SESSION_STRING = os.getenv("SESSION_STRING", "")
+# Telegram bot initialize
+app_bot = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Flask app
-server = Flask(__name__)
+# Flask app for keep-alive
+flask_app = Flask(__name__)
 
-# ---------- CONFIG: Multiple Groups ----------
-spam_config = {
-    "groups": [],  # 🔥 Multiple groups ki list
-    "message": "Hello from Userbot! 🚀",
-    "interval": 30,
-    "is_running": False,
-    "current_index": 0  # Current group index
-}
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Clients
-bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-user = Client("user_account", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
-
-# ---------- HELPERS ----------
-def parse_group(group_input):
-    """Convert username/ID/link to proper format"""
-    group_input = group_input.strip()
-    
-    # Agar link hai (t.me/)
-    if "t.me/" in group_input:
-        group_input = group_input.split("t.me/")[1]
-    
-    # Agar username hai toh @ lagao
-    if not group_input.startswith("@") and not group_input.startswith("-"):
-        group_input = f"@{group_input}"
-    
-    return group_input
-
-# ---------- SPAM WORKER ----------
-async def spam_worker():
-    while True:
-        if spam_config["is_running"] and spam_config["groups"]:
-            try:
-                # Har group mein ek ek karke message bhejo
-                for group in spam_config["groups"]:
-                    try:
-                        await user.send_message(group, spam_config["message"])
-                        print(f"[+] Message sent to {group}")
-                    except Exception as e:
-                        print(f"[-] Error sending to {group}: {e}")
-                    
-                    # Har group ke baad thoda wait
-                    await asyncio.sleep(5)
-                
-                # Sab groups mein bhejne ke baad interval wait
-                await asyncio.sleep(spam_config["interval"])
-                
-            except Exception as e:
-                print(f"[-] Spam Error: {e}")
-                await asyncio.sleep(10)
-        else:
-            await asyncio.sleep(1)
-
-# ---------- BOT COMMANDS ----------
-@bot.on_message(filters.command(["start", "help"]))
-async def start_command(client, message):
-    help_text = (
-        "🤖 **Userbot Controller**\n\n"
-        "📌 **Group Commands:**\n"
-        "/addgroup @username or -100xxxx - Add group\n"
-        "/addgroup id:-100xxxx - Add by ID\n"
-        "/removegroup @username - Remove group\n"
-        "/listgroups - Show all groups\n"
-        "/cleargroups - Remove all groups\n\n"
-        "📌 **Spam Commands:**\n"
-        "/setmsg Your text - Set message\n"
-        "/settime 30 - Set interval (min 10s)\n"
-        "/start_spam - Start spamming\n"
-        "/stop_spam - Stop spamming\n"
-        "/status - Check config\n\n"
-        "🔓 Open for everyone!"
-    )
-    await message.reply_text(help_text)
-
-@bot.on_message(filters.command("addgroup"))
-async def add_group(client, message):
-    try:
-        group_input = message.text.split(maxsplit=1)[1]
-        group = parse_group(group_input)
-        
-        if group in spam_config["groups"]:
-            await message.reply_text(f"⚠️ Group already added: `{group}`")
-            return
-        
-        spam_config["groups"].append(group)
-        await message.reply_text(f"✅ Group added: `{group}`\n📊 Total groups: {len(spam_config['groups'])}")
-    except:
-        await message.reply_text("❌ Format: `/addgroup @username` or `/addgroup -100123456789`")
-
-@bot.on_message(filters.command("removegroup"))
-async def remove_group(client, message):
-    try:
-        group_input = message.text.split(maxsplit=1)[1]
-        group = parse_group(group_input)
-        
-        if group not in spam_config["groups"]:
-            await message.reply_text(f"❌ Group not found: `{group}`")
-            return
-        
-        spam_config["groups"].remove(group)
-        await message.reply_text(f"✅ Group removed: `{group}`\n📊 Total groups: {len(spam_config['groups'])}")
-    except:
-        await message.reply_text("❌ Format: `/removegroup @username`")
-
-@bot.on_message(filters.command("listgroups"))
-async def list_groups(client, message):
-    if not spam_config["groups"]:
-        await message.reply_text("📭 No groups added yet!\nUse `/addgroup @username` to add.")
-        return
-    
-    groups_list = "\n".join([f"• {i+1}. `{g}`" for i, g in enumerate(spam_config["groups"])])
-    await message.reply_text(
-        f"📋 **Added Groups ({len(spam_config['groups'])}):**\n\n{groups_list}"
-    )
-
-@bot.on_message(filters.command("cleargroups"))
-async def clear_groups(client, message):
-    if not spam_config["groups"]:
-        await message.reply_text("📭 No groups to clear!")
-        return
-    
-    count = len(spam_config["groups"])
-    spam_config["groups"] = []
-    await message.reply_text(f"🗑️ Removed all {count} groups!")
-
-@bot.on_message(filters.command("setmsg"))
-async def set_msg(client, message):
-    try:
-        msg = message.text.split(maxsplit=1)[1]
-        spam_config["message"] = msg
-        await message.reply_text(f"✅ Message set:\n`{msg}`")
-    except:
-        await message.reply_text("❌ Format: `/setmsg Your text here`")
-
-@bot.on_message(filters.command("settime"))
-async def set_time(client, message):
-    try:
-        sec = int(message.text.split(maxsplit=1)[1])
-        if sec < 10:
-            await message.reply_text("⚠️ Minimum 10 seconds required!")
-            return
-        spam_config["interval"] = sec
-        await message.reply_text(f"✅ Interval set: {sec} seconds")
-    except:
-        await message.reply_text("❌ Format: `/settime 30`")
-
-@bot.on_message(filters.command("status"))
-async def status(client, message):
-    status_text = (
-        f"📊 **Current Status**\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"Groups: `{len(spam_config['groups'])}`\n"
-        f"Message: `{spam_config['message']}`\n"
-        f"Interval: `{spam_config['interval']}s`\n"
-        f"Running: `{'✅ YES' if spam_config['is_running'] else '❌ NO'}`\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"Use `/listgroups` to see all groups"
-    )
-    await message.reply_text(status_text)
-
-@bot.on_message(filters.command("start_spam"))
-async def start_spam(client, message):
-    if not spam_config["groups"]:
-        await message.reply_text("❌ Add at least one group using `/addgroup`")
-        return
-    
-    if not spam_config["is_running"]:
-        spam_config["is_running"] = True
-        await message.reply_text(
-            f"🚀 **Spamming started!**\n"
-            f"📊 Groups: {len(spam_config['groups'])}\n"
-            f"⏱️ Interval: {spam_config['interval']}s\n"
-            f"💬 Message: `{spam_config['message']}`"
-        )
-    else:
-        await message.reply_text("⚠️ Spam already running!")
-
-@bot.on_message(filters.command("stop_spam"))
-async def stop_spam(client, message):
-    if spam_config["is_running"]:
-        spam_config["is_running"] = False
-        await message.reply_text("🛑 **Spamming stopped!**")
-    else:
-        await message.reply_text("⚠️ Spam is not running!")
-
-# ---------- FLASK ----------
-@server.route('/')
+# ============ KEEP-ALIVE FLASK SERVER ============
+@flask_app.route('/')
 def home():
-    return "Userbot is running! 🚀", 200
+    return "✅ Bot is Alive & Running!", 200
 
-# ---------- MAIN ----------
-async def main():
-    print("Starting bot...")
-    await bot.start()
-    print("✅ Bot started!")
-    await user.start()
-    print("✅ User client started!")
-    
-    asyncio.create_task(spam_worker())
-    
-    while True:
-        await asyncio.sleep(1)
+@flask_app.route('/ping')
+def ping():
+    return "Pong!", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    server.run(host='0.0.0.0', port=port, use_reloader=False, debug=False)
+    """Flask server chalayein background mein"""
+    flask_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
-# ---------- ENTRY ----------
-if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
+# ============ SELF-PING FUNCTION ============
+def self_ping():
+    """Har 5 minute mein apne aap ko ping karein"""
+    while True:
+        time.sleep(300)  # 5 minutes
+        try:
+            # Render par deploy hai toh ye URL use karein
+            # Local testing ke liye localhost
+            response = requests.get('http://localhost:8080/ping', timeout=5)
+            logger.info(f"✅ Self-ping successful: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"⚠️ Self-ping failed: {e}")
+
+# ============ FLOOD WAIT HANDLER ============
+async def safe_send_message(chat_id, text):
+    """Flood wait handle karne ke liye wrapper function"""
     try:
-        loop.run_until_complete(main())
+        await app_bot.send_message(chat_id, text)
+        return True
+    except FloodWait as e:
+        wait_time = e.value
+        logger.warning(f"⏳ Flood wait: {wait_time} seconds")
+        
+        # Agar wait time zyada hai toh notify karein
+        if wait_time > 60:
+            logger.error(f"❌ Long flood wait: {wait_time}s - Bot might be blocked")
+            # Admin ko notify karein (optional)
+            await app_bot.send_message(YOUR_ADMIN_ID, f"⚠️ Flood wait: {wait_time} seconds")
+        
+        await asyncio.sleep(wait_time + 1)  # +1 second extra safety
+        return await app_bot.send_message(chat_id, text)
+    
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"❌ Send failed: {e}")
+        return False
+
+# ============ YOUR BOT COMMANDS ============
+@app_bot.on_message(filters.command("start"))
+async def start_command(client, message):
+    await message.reply_text(
+        "🤖 Bot is alive!\n"
+        "Commands:\n"
+        "/ping - Check bot status\n"
+        "/status - Check bot health"
+    )
+
+@app_bot.on_message(filters.command("ping"))
+async def ping_command(client, message):
+    await message.reply_text("🏓 Pong! Bot is working fine.")
+
+@app_bot.on_message(filters.command("status"))
+async def status_command(client, message):
+    await message.reply_text(
+        "✅ Bot Status:\n"
+        f"• Running: Yes\n"
+        f"• Uptime: Active\n"
+        f"• Keep-alive: Enabled"
+    )
+
+# ============ MAIN BOT FUNCTION ============
+async def run_bot():
+    """Bot ko start karein"""
+    logger.info("🚀 Starting bot...")
+    try:
+        await app_bot.start()
+        logger.info("✅ Bot started successfully!")
+        
+        # Bot info get karein
+        bot_info = await app_bot.get_me()
+        logger.info(f"🤖 Bot: @{bot_info.username}")
+        
+        # Yahan apna bot logic daalein
+        # Example: Auto-message send karna
+        # await safe_send_message(chat_id, "Hello!")
+        
+        # Bot ko continuously run karein
+        await asyncio.Event().wait()  # Infinite wait
+        
+    except Exception as e:
+        logger.error(f"❌ Bot failed: {e}")
+    finally:
+        await app_bot.stop()
+
+# ============ MAIN ENTRY POINT ============
+if __name__ == "__main__":
+    logger.info("🔄 Starting application...")
+    
+    # 1. Flask server start karein (background thread)
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("🌐 Flask server started on port 8080")
+    
+    # 2. Self-ping thread start karein
+    ping_thread = threading.Thread(target=self_ping, daemon=True)
+    ping_thread.start()
+    logger.info("🔄 Self-ping started (every 5 minutes)")
+    
+    # 3. Bot run karein
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")

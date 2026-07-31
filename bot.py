@@ -7,9 +7,10 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, UserNotParticipant
 
-# 🔥 Telethon support ke liye
+# 🔥 Telethon support - In-memory session
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
+from telethon.sessions import StringSession
 
 # ---------- PYTHON 3.14 FIX ----------
 if sys.version_info >= (3, 14):
@@ -30,7 +31,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # 🔥 Pyrogram Sessions
 PYROGRAM_SESSIONS = os.getenv("PYROGRAM_SESSIONS", "").split(',')
 
-# 🔥 Telethon Sessions
+# 🔥 Telethon Sessions (String sessions)
 TELETHON_SESSIONS = os.getenv("TELETHON_SESSIONS", "").split(',')
 
 # Flask app
@@ -58,15 +59,19 @@ for i, session in enumerate(PYROGRAM_SESSIONS):
             "client": Client(f"pyro_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session)
         })
 
-# 🔥 Telethon User Clients
+# 🔥 Telethon User Clients - In-Memory Sessions
 tele_clients = []
 for i, session in enumerate(TELETHON_SESSIONS):
     session = session.strip()
     if session:
-        tele_clients.append({
-            "type": "telethon",
-            "client": TelegramClient(session, API_ID, API_HASH)
-        })
+        try:
+            # 🔥 StringSession use karo - file nahi banegi
+            tele_clients.append({
+                "type": "telethon",
+                "client": TelegramClient(StringSession(session), API_ID, API_HASH)
+            })
+        except Exception as e:
+            print(f"[-] Telethon session error: {e}")
 
 # ---------- HELPERS ----------
 def parse_group(group_input):

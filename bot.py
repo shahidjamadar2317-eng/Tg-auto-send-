@@ -1,141 +1,333 @@
-from pyrogram import Client, filters
-from pyrogram.errors import FloodWait
 import asyncio
-import time
+import os
 import threading
+import sys
+import re
 from flask import Flask
-import requests
-import logging
+from pyrogram import Client, filters
+from pyrogram.errors import FloodWait, UserNotParticipant
 
-# ============ CONFIGURATION ============
-API_ID = 123456  # Apna API ID daalein
-API_HASH = "your_api_hash_here"  # Apna API Hash
-BOT_TOKEN = "your_bot_token_here"  # Apna Bot Token
+# 🔥 Telethon support ke liye
+from telethon import TelegramClient
+from telethon.errors import FloodWaitError
 
-# Telegram bot initialize
-app_bot = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# Flask app for keep-alive
-flask_app = Flask(__name__)
-
-# Logging setup
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ============ KEEP-ALIVE FLASK SERVER ============
-@flask_app.route('/')
-def home():
-    return "✅ Bot is Alive & Running!", 200
-
-@flask_app.route('/ping')
-def ping():
-    return "Pong!", 200
-
-def run_flask():
-    """Flask server chalayein background mein"""
-    flask_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
-
-# ============ SELF-PING FUNCTION ============
-def self_ping():
-    """Har 5 minute mein apne aap ko ping karein"""
-    while True:
-        time.sleep(300)  # 5 minutes
-        try:
-            # Render par deploy hai toh ye URL use karein
-            # Local testing ke liye localhost
-            response = requests.get('http://localhost:8080/ping', timeout=5)
-            logger.info(f"✅ Self-ping successful: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"⚠️ Self-ping failed: {e}")
-
-# ============ FLOOD WAIT HANDLER ============
-async def safe_send_message(chat_id, text):
-    """Flood wait handle karne ke liye wrapper function"""
+# ---------- PYTHON 3.14 FIX ----------
+if sys.version_info >= (3, 14):
     try:
-        await app_bot.send_message(chat_id, text)
+        asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+else:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+# ---------- ENV VARIABLES ----------
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+
+# 🔥 Pyrogram Sessions
+PYROGRAM_SESSIONS = os.getenv("PYROGRAM_SESSIONS", "").split(',')
+
+# 🔥 Telethon Sessions
+TELETHON_SESSIONS = os.getenv("TELETHON_SESSIONS", "").split(',')
+
+# Flask app
+server = Flask(__name__)
+
+# ---------- CONFIG ----------
+spam_config = {
+    "groups": [],
+    "message": "Hello from Userbot! 🚀",
+    "interval": 30,
+    "is_running": False
+}
+
+# ---------- CLIENTS ----------
+# Bot (Pyrogram)
+bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# 🔥 Pyrogram User Clients
+pyro_clients = []
+for i, session in enumerate(PYROGRAM_SESSIONS):
+    session = session.strip()
+    if session:
+        pyro_clients.append({
+            "type": "pyrogram",
+            "client": Client(f"pyro_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session)
+        })
+
+# 🔥 Telethon User Clients
+tele_clients = []
+for i, session in enumerate(TELETHON_SESSIONS):
+    session = session.strip()
+    if session:
+        tele_clients.append({
+            "type": "telethon",
+            "client": TelegramClient(session, API_ID, API_HASH)
+        })
+
+# ---------- HELPERS ----------
+def parse_group(group_input):
+    group_input = group_input.strip()
+    if "t.me/" in group_input:
+        if "joinchat" in group_input:
+            group_input = group_input.split("t.me/joinchat/")[1]
+        else:
+            group_input = group_input.split("t.me/")[1]
+    if not group_input.startswith("@") and not group_input.startswith("-"):
+        group_input = f"@{group_input}"
+    return group_input
+
+async def send_message_pyrogram(client, group, message):
+    try:
+        await client.send_message(group, message)
         return True
-    except FloodWait as e:
-        wait_time = e.value
-        logger.warning(f"⏳ Flood wait: {wait_time} seconds")
-        
-        # Agar wait time zyada hai toh notify karein
-        if wait_time > 60:
-            logger.error(f"❌ Long flood wait: {wait_time}s - Bot might be blocked")
-            # Admin ko notify karein (optional)
-            await app_bot.send_message(YOUR_ADMIN_ID, f"⚠️ Flood wait: {wait_time} seconds")
-        
-        await asyncio.sleep(wait_time + 1)  # +1 second extra safety
-        return await app_bot.send_message(chat_id, text)
-    
     except Exception as e:
-        logger.error(f"❌ Send failed: {e}")
+        print(f"[-] Pyrogram Error: {e}")
         return False
 
-# ============ YOUR BOT COMMANDS ============
-@app_bot.on_message(filters.command("start"))
+async def send_message_telethon(client, group, message):
+    try:
+        await client.send_message(group, message)
+        return True
+    except Exception as e:
+        print(f"[-] Telethon Error: {e}")
+        return False
+
+# ---------- SPAM WORKER ----------
+async def spam_worker():
+    while True:
+        if spam_config["is_running"] and spam_config["groups"]:
+            for group in spam_config["groups"]:
+                # 🔥 Pyrogram clients
+                for item in pyro_clients:
+                    try:
+                        await send_message_pyrogram(item["client"], group, spam_config["message"])
+                        print(f"[+] Pyrogram: Message sent to {group}")
+                    except FloodWait as e:
+                        wait = e.value + 10
+                        print(f"[!] Pyrogram Flood wait! {wait}s")
+                        await asyncio.sleep(wait)
+                    except Exception as e:
+                        print(f"[-] Pyrogram Error: {e}")
+                    await asyncio.sleep(2)
+                
+                # 🔥 Telethon clients
+                for item in tele_clients:
+                    try:
+                        await send_message_telethon(item["client"], group, spam_config["message"])
+                        print(f"[+] Telethon: Message sent to {group}")
+                    except FloodWaitError as e:
+                        wait = e.seconds + 10
+                        print(f"[!] Telethon Flood wait! {wait}s")
+                        await asyncio.sleep(wait)
+                    except Exception as e:
+                        print(f"[-] Telethon Error: {e}")
+                    await asyncio.sleep(2)
+                
+                await asyncio.sleep(3)
+            
+            await asyncio.sleep(spam_config["interval"])
+        else:
+            await asyncio.sleep(1)
+
+# ---------- BOT COMMANDS ----------
+@bot.on_message(filters.command(["start", "help"]))
 async def start_command(client, message):
-    await message.reply_text(
-        "🤖 Bot is alive!\n"
-        "Commands:\n"
-        "/ping - Check bot status\n"
-        "/status - Check bot health"
+    total_accounts = len(pyro_clients) + len(tele_clients)
+    help_text = (
+        "🤖 **Userbot Controller**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Pyrogram: `{len(pyro_clients)}`\n"
+        f"👤 Telethon: `{len(tele_clients)}`\n"
+        f"📊 Groups: `{len(spam_config['groups'])}`\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📌 **Group Commands:**\n"
+        "/addgroup @username - Add by username\n"
+        "/addgroup -100xxxx - Add by ID\n"
+        "/addgroup t.me/group - Add by link\n"
+        "/removegroup @username - Remove group\n"
+        "/listgroups - Show all groups\n"
+        "/cleargroups - Remove all groups\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📌 **Spam Commands:**\n"
+        "/setmsg Your text - Set message\n"
+        "/settime 30 - Set interval (min 10s)\n"
+        "/start_spam - Start spamming\n"
+        "/stop_spam - Stop spamming\n"
+        "/status - Check config"
     )
+    await message.reply_text(help_text)
 
-@app_bot.on_message(filters.command("ping"))
-async def ping_command(client, message):
-    await message.reply_text("🏓 Pong! Bot is working fine.")
-
-@app_bot.on_message(filters.command("status"))
-async def status_command(client, message):
-    await message.reply_text(
-        "✅ Bot Status:\n"
-        f"• Running: Yes\n"
-        f"• Uptime: Active\n"
-        f"• Keep-alive: Enabled"
-    )
-
-# ============ MAIN BOT FUNCTION ============
-async def run_bot():
-    """Bot ko start karein"""
-    logger.info("🚀 Starting bot...")
+@bot.on_message(filters.command("addgroup"))
+async def add_group(client, message):
     try:
-        await app_bot.start()
-        logger.info("✅ Bot started successfully!")
+        group_input = message.text.split(maxsplit=1)[1]
+        group = parse_group(group_input)
         
-        # Bot info get karein
-        bot_info = await app_bot.get_me()
-        logger.info(f"🤖 Bot: @{bot_info.username}")
+        if group in spam_config["groups"]:
+            await message.reply_text(f"⚠️ Already added: `{group}`")
+            return
         
-        # Yahan apna bot logic daalein
-        # Example: Auto-message send karna
-        # await safe_send_message(chat_id, "Hello!")
-        
-        # Bot ko continuously run karein
-        await asyncio.Event().wait()  # Infinite wait
-        
-    except Exception as e:
-        logger.error(f"❌ Bot failed: {e}")
-    finally:
-        await app_bot.stop()
+        spam_config["groups"].append(group)
+        await message.reply_text(
+            f"✅ **Group Added!**\n"
+            f"📌 `{group}`\n"
+            f"📊 Total: `{len(spam_config['groups'])}`"
+        )
+    except:
+        await message.reply_text(
+            "❌ **Format:**\n"
+            "/addgroup @username\n"
+            "/addgroup -100123456789\n"
+            "/addgroup t.me/groupname"
+        )
 
-# ============ MAIN ENTRY POINT ============
+@bot.on_message(filters.command("removegroup"))
+async def remove_group(client, message):
+    try:
+        group_input = message.text.split(maxsplit=1)[1]
+        group = parse_group(group_input)
+        
+        if group not in spam_config["groups"]:
+            await message.reply_text(f"❌ Not found: `{group}`")
+            return
+        
+        spam_config["groups"].remove(group)
+        await message.reply_text(f"✅ Removed: `{group}`\n📊 Total: `{len(spam_config['groups'])}`")
+    except:
+        await message.reply_text("❌ /removegroup @username")
+
+@bot.on_message(filters.command("listgroups"))
+async def list_groups(client, message):
+    if not spam_config["groups"]:
+        await message.reply_text("📭 **No groups added!**")
+        return
+    
+    groups_list = "\n".join([f"• {i+1}. `{g}`" for i, g in enumerate(spam_config["groups"])])
+    await message.reply_text(f"📋 **Groups ({len(spam_config['groups'])}):**\n\n{groups_list}")
+
+@bot.on_message(filters.command("cleargroups"))
+async def clear_groups(client, message):
+    count = len(spam_config["groups"])
+    spam_config["groups"] = []
+    await message.reply_text(f"🗑️ **Removed all {count} groups!**")
+
+@bot.on_message(filters.command("setmsg"))
+async def set_msg(client, message):
+    try:
+        msg = message.text.split(maxsplit=1)[1]
+        spam_config["message"] = msg
+        await message.reply_text(f"✅ **Message set:**\n`{msg}`")
+    except:
+        await message.reply_text("❌ /setmsg Your text here")
+
+@bot.on_message(filters.command("settime"))
+async def set_time(client, message):
+    try:
+        sec = int(message.text.split(maxsplit=1)[1])
+        if sec < 10:
+            await message.reply_text("⚠️ Minimum 10 seconds required!")
+            return
+        spam_config["interval"] = sec
+        await message.reply_text(f"✅ **Interval:** `{sec} seconds`")
+    except:
+        await message.reply_text("❌ /settime 30")
+
+@bot.on_message(filters.command("status"))
+async def status(client, message):
+    total_accounts = len(pyro_clients) + len(tele_clients)
+    status_text = (
+        f"📊 **Current Status**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Pyrogram Accounts: `{len(pyro_clients)}`\n"
+        f"Telethon Accounts: `{len(tele_clients)}`\n"
+        f"Total Accounts: `{total_accounts}`\n"
+        f"Groups: `{len(spam_config['groups'])}`\n"
+        f"Message: `{spam_config['message']}`\n"
+        f"Interval: `{spam_config['interval']}s`\n"
+        f"Running: `{'✅ YES' if spam_config['is_running'] else '❌ NO'}`"
+    )
+    await message.reply_text(status_text)
+
+@bot.on_message(filters.command("start_spam"))
+async def start_spam(client, message):
+    if not spam_config["groups"]:
+        await message.reply_text("❌ **No groups!** Use `/addgroup @username`")
+        return
+    
+    total_accounts = len(pyro_clients) + len(tele_clients)
+    if total_accounts == 0:
+        await message.reply_text("❌ **No accounts!** Add sessions in environment variables")
+        return
+    
+    if not spam_config["is_running"]:
+        spam_config["is_running"] = True
+        await message.reply_text(
+            f"🚀 **Spamming Started!**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Groups: `{len(spam_config['groups'])}`\n"
+            f"👤 Total Accounts: `{total_accounts}`\n"
+            f"⏱️ Interval: `{spam_config['interval']}s`\n"
+            f"💬 Message: `{spam_config['message']}`"
+        )
+    else:
+        await message.reply_text("⚠️ **Already running!**")
+
+@bot.on_message(filters.command("stop_spam"))
+async def stop_spam(client, message):
+    if spam_config["is_running"]:
+        spam_config["is_running"] = False
+        await message.reply_text("🛑 **Spamming Stopped!**")
+    else:
+        await message.reply_text("⚠️ **Not running!**")
+
+# ---------- FLASK ----------
+@server.route('/')
+def home():
+    return "Userbot is running! 🚀", 200
+
+# ---------- MAIN ----------
+async def main():
+    print("🤖 Starting bot...")
+    await bot.start()
+    print("✅ Bot started!")
+    
+    # 🔥 Start Pyrogram clients
+    print("👤 Starting Pyrogram accounts...")
+    for item in pyro_clients:
+        try:
+            await item["client"].start()
+            print("✅ Pyrogram account started!")
+        except Exception as e:
+            print(f"❌ Pyrogram failed: {e}")
+    
+    # 🔥 Start Telethon clients
+    print("👤 Starting Telethon accounts...")
+    for item in tele_clients:
+        try:
+            await item["client"].start()
+            print("✅ Telethon account started!")
+        except Exception as e:
+            print(f"❌ Telethon failed: {e}")
+    
+    total = len(pyro_clients) + len(tele_clients)
+    print(f"📊 Total accounts: {total}")
+    
+    asyncio.create_task(spam_worker())
+    
+    while True:
+        await asyncio.sleep(1)
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    server.run(host='0.0.0.0', port=port, use_reloader=False, debug=False)
+
 if __name__ == "__main__":
-    logger.info("🔄 Starting application...")
-    
-    # 1. Flask server start karein (background thread)
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("🌐 Flask server started on port 8080")
-    
-    # 2. Self-ping thread start karein
-    ping_thread = threading.Thread(target=self_ping, daemon=True)
-    ping_thread.start()
-    logger.info("🔄 Self-ping started (every 5 minutes)")
-    
-    # 3. Bot run karein
+    threading.Thread(target=run_flask, daemon=True).start()
     try:
-        asyncio.run(run_bot())
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
+        loop.run_until_complete(main())
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        print(f"❌ Error: {e}")

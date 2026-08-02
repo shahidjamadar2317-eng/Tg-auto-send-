@@ -3,24 +3,35 @@ import asyncio
 import threading
 import sys
 import time
+import shutil
 from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ---------- CLEAR CACHE ----------
-def clear_cache():
+# ---------- FORCE CACHE CLEAR ----------
+def force_clear_cache():
     try:
         for f in os.listdir('.'):
             if f.endswith('.session') or f.endswith('.session-journal'):
                 os.remove(f)
                 print(f"[+] Deleted: {f}")
-    except:
-        pass
+        
+        storage_path = '.venv/lib/python3.11/site-packages/pyrogram/storage/'
+        if os.path.exists(storage_path):
+            for f in os.listdir(storage_path):
+                if f.endswith('.db') or f.endswith('.db-journal'):
+                    os.remove(os.path.join(storage_path, f))
+                    print(f"[+] Deleted storage: {f}")
+        
+        print("✅ Cache cleared successfully!")
+    except Exception as e:
+        print(f"[-] Cache clear error: {e}")
 
-print("🗑️ Clearing cache...")
-clear_cache()
-# ---------------------------------
+print("🗑️ Force clearing cache...")
+force_clear_cache()
+print("✅ Done!")
+# ------------------------------------------------
 
 if sys.version_info >= (3, 14):
     try:
@@ -55,10 +66,8 @@ def get_config(user_id):
     return user_configs[user_id]
 
 # ---------- CLIENTS ----------
-# Bot
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# 🔥 Pyrogram User Clients
 user_clients = []
 for i, s in enumerate(SESSION_STRINGS):
     s = s.strip()
@@ -82,7 +91,7 @@ async def spam_worker():
                     for user in user_clients:
                         try:
                             await user["client"].send_message(config["selected_group"], config["message"])
-                            print(f"[+] {user['name']}: Message sent to {config['selected_group']}")
+                            print(f"[+] {user['name']}: Message sent")
                         except FloodWait as e:
                             wait = e.value + 10
                             print(f"[!] Flood wait! {wait}s")
@@ -135,7 +144,7 @@ async def start_cmd(client, message):
         "/listgroups - List added groups\n"
         "/cleargroups - Clear all groups\n"
         "/setmsg text - Set message\n"
-        "/settime 30 - Set interval (min 10s)\n"
+        "/settime 30 - Set interval\n"
         "/start_spam - Start spamming\n"
         "/stop_spam - Stop spamming\n"
         "/status - Check status"
@@ -151,8 +160,9 @@ async def groups_cmd(client, message):
         return
     
     try:
+        # 🔥 Check if connected
         if not user_clients[0]["client"].is_connected:
-            await message.reply_text("⏳ Connecting... Please wait 5 seconds!")
+            await message.reply_text("⏳ Connecting... Please wait 10 seconds and try again!")
             return
         
         groups = []
@@ -165,7 +175,13 @@ async def groups_cmd(client, message):
                 })
         
         if not groups:
-            await message.reply_text("📭 No groups found!\nMake sure accounts are joined to groups.")
+            await message.reply_text(
+                "📭 **No groups found!**\n\n"
+                "**Possible Reasons:**\n"
+                "1. Accounts are not joined to any group\n"
+                "2. Try manually adding: `/addgroup @username`\n"
+                "3. Wait 10 seconds and try `/groups` again"
+            )
             return
         
         buttons = []
@@ -215,7 +231,7 @@ async def addgroup_cmd(client, message):
         config["selected_group"] = g
         await message.reply_text(f"✅ **Group Added!**\n📌 `{g}`")
     except:
-        await message.reply_text("❌ /addgroup @username or /addgroup t.me/group")
+        await message.reply_text("❌ /addgroup @username")
 
 @bot.on_message(filters.command("listgroups"))
 async def listgroups_cmd(client, message):
@@ -288,7 +304,7 @@ async def status_cmd(client, message):
     )
     
     if connected == 0:
-        status_text += "\n\n⚠️ **No accounts connected!**\nCheck SESSION_STRINGS in environment variables."
+        status_text += "\n\n⚠️ **No accounts connected!**\nCheck SESSION_STRINGS."
     
     await message.reply_text(status_text)
 
@@ -302,7 +318,7 @@ async def start_spam_cmd(client, message):
         return
     
     if not user_clients:
-        await message.reply_text("❌ **No accounts!**\nCheck SESSION_STRINGS.")
+        await message.reply_text("❌ **No accounts!**")
         return
     
     if not config["is_running"]:
@@ -313,9 +329,7 @@ async def start_spam_cmd(client, message):
             f"📌 Group: `{config['selected_group']}`\n"
             f"👤 Accounts: `{len(user_clients)}`\n"
             f"⏱️ Interval: `{config['interval']}s`\n"
-            f"💬 Message: `{config['message'][:50]}{'...' if len(config['message']) > 50 else ''}`\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🛑 Use `/stop_spam` to stop"
+            f"💬 Message: `{config['message'][:50]}{'...' if len(config['message']) > 50 else ''}`"
         )
     else:
         await message.reply_text("⚠️ **Already running!**")

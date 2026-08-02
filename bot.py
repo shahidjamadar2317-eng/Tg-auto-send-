@@ -1,40 +1,24 @@
 import os
-import shutil
-import sys
 import asyncio
 import threading
+import sys
 from flask import Flask
-from pyrogram import Client, filters
-from pyrogram.errors import FloodWait, UserNotParticipant
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telethon import TelegramClient
+from telethon.errors import FloodWaitError
+from telethon.tl.types import Chat, Channel
+from telethon import events
 
-# ---------- 🔥 HARD RESET ----------
-def hard_reset():
+# ---------- CLEAR CACHE ----------
+def clear_cache():
     try:
         for f in os.listdir('.'):
             if f.endswith('.session') or f.endswith('.session-journal'):
                 os.remove(f)
-                print(f"[+] Deleted: {f}")
-        
-        storage_path = '.venv/lib/python3.11/site-packages/pyrogram/storage/'
-        if os.path.exists(storage_path):
-            for f in os.listdir(storage_path):
-                if f.endswith('.db') or f.endswith('.db-journal'):
-                    os.remove(os.path.join(storage_path, f))
-                    print(f"[+] Deleted storage: {f}")
-        
-        for root, dirs, files in os.walk('.'):
-            if '__pycache__' in dirs:
-                shutil.rmtree(os.path.join(root, '__pycache__'))
-                print(f"[+] Deleted: __pycache__")
-        
-        print("✅ HARD RESET COMPLETE!")
-    except Exception as e:
-        print(f"[-] Reset error: {e}")
+    except:
+        pass
 
-print("🗑️ HARD RESET STARTING...")
-hard_reset()
-# ------------------------------------------------
+clear_cache()
+# ---------------------------------
 
 if sys.version_info >= (3, 14):
     try:
@@ -49,6 +33,8 @@ else:
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+
+# 🔥 Telethon Sessions (String sessions)
 SESSION_STRINGS = os.getenv("SESSION_STRINGS", "").split(',')
 
 server = Flask(__name__)
@@ -66,25 +52,34 @@ def get_config(user_id):
         }
     return user_configs[user_id]
 
+# ---------- CLIENTS ----------
+# Bot (Pyrogram - keep for commands)
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# 🔥 Telethon User Clients
 user_clients = []
 for i, s in enumerate(SESSION_STRINGS):
     s = s.strip()
     if s:
-        user_clients.append(Client(f"user_{i}", api_id=API_ID, api_hash=API_HASH, session_string=s))
+        user_clients.append({
+            "name": f"Account_{i+1}",
+            "client": TelegramClient(s, API_ID, API_HASH)
+        })
 
 # ---------- SPAM WORKER ----------
 async def spam_worker():
     while True:
         for user_id, config in user_configs.items():
             if config["is_running"] and config["selected_group"] and user_clients:
-                for client in user_clients:
+                for user in user_clients:
                     try:
-                        await client.send_message(config["selected_group"], config["message"])
-                        print(f"[+] Message sent")
-                    except FloodWait as e:
-                        wait = e.value + 10
+                        await user["client"].send_message(config["selected_group"], config["message"])
+                        print(f"[+] {user['name']}: Message sent")
+                    except FloodWaitError as e:
+                        wait = e.seconds + 10
                         print(f"[!] Flood wait! {wait}s")
                         await asyncio.sleep(wait)
                     except Exception as e:
@@ -97,7 +92,7 @@ async def spam_worker():
 @bot.on_message(filters.command(["start", "help"]))
 async def start_cmd(client, message):
     await message.reply_text(
-        "🤖 **Userbot Controller**\n"
+        "🤖 **Userbot Controller (Telethon)**\n"
         "/groups - Show joined groups\n"
         "/addgroup @username - Add group\n"
         "/listgroups - List added groups\n"
@@ -119,22 +114,17 @@ async def groups_cmd(client, message):
         return
     
     try:
-        # Wait for client to be ready
-        if not user_clients[0].is_connected:
-            await message.reply_text("⏳ Connecting... Please wait 5 seconds!")
-            return
-        
         groups = []
-        async for dialog in user_clients[0].get_dialogs():
-            if dialog.chat.type in ["group", "supergroup", "channel"]:
+        async for dialog in user_clients[0]["client"].iter_dialogs():
+            if dialog.is_group or dialog.is_channel:
                 groups.append({
-                    "id": dialog.chat.id,
-                    "title": dialog.chat.title,
-                    "username": dialog.chat.username
+                    "id": dialog.id,
+                    "title": dialog.name,
+                    "username": dialog.entity.username
                 })
         
         if not groups:
-            await message.reply_text("📭 No groups found!\nMake sure accounts are joined to groups.")
+            await message.reply_text("📭 No groups found!")
             return
         
         buttons = []
@@ -144,7 +134,6 @@ async def groups_cmd(client, message):
         
         await message.reply_text(
             f"📋 **Your Groups ({len(groups)})**\n"
-            f"Click to select:\n"
             f"Selected: `{config['selected_group']}`",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
@@ -161,8 +150,8 @@ async def callback(cq):
         config["selected_group"] = group_id
         if group_id not in config["groups"]:
             config["groups"].append(group_id)
-        await cq.answer("✅ Group Selected!")
-        await cq.edit_message_text(f"✅ **Selected:** `{group_id}`\nUse /start_spam")
+        await cq.answer("✅ Selected!")
+        await cq.edit_message_text(f"✅ Selected: `{group_id}`\nUse /start_spam")
 
 @bot.on_message(filters.command("addgroup"))
 async def addgroup_cmd(client, message):
@@ -227,15 +216,15 @@ async def settime_cmd(client, message):
 async def status_cmd(client, message):
     user_id = message.from_user.id
     config = get_config(user_id)
-    started = sum(1 for c in user_clients if c.is_connected)
+    started = sum(1 for c in user_clients if c["client"].is_connected())
     await message.reply_text(
-        f"📊 **Status**\n"
+        f"📊 **Status (Telethon)**\n"
         f"Groups Added: `{len(config['groups'])}`\n"
         f"Selected: `{config['selected_group']}`\n"
         f"Message: `{config['message'][:30]}`\n"
         f"Interval: `{config['interval']}s`\n"
         f"Running: `{'✅' if config['is_running'] else '❌'}`\n"
-        f"Accounts Connected: `{started}/{len(user_clients)}`"
+        f"Accounts: `{started}/{len(user_clients)}`"
     )
 
 @bot.on_message(filters.command("start_spam"))
@@ -273,13 +262,13 @@ async def main():
     await bot.start()
     print("✅ Bot started!")
     
-    print("👤 Starting accounts...")
-    for c in user_clients:
+    print("👤 Starting Telethon accounts...")
+    for user in user_clients:
         try:
-            await c.start()
-            print("✅ Account started!")
+            await user["client"].start()
+            print(f"✅ {user['name']}: Started!")
         except Exception as e:
-            print(f"❌ Failed: {e}")
+            print(f"❌ {user['name']}: Failed - {e}")
     
     print(f"📊 Total accounts: {len(user_clients)}")
     asyncio.create_task(spam_worker())

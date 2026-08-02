@@ -4,10 +4,8 @@ import threading
 import sys
 import time
 from flask import Flask
-from telethon import TelegramClient
-from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession
 from pyrogram import Client, filters
+from pyrogram.errors import FloodWait, UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ---------- CLEAR CACHE ----------
@@ -57,16 +55,16 @@ def get_config(user_id):
     return user_configs[user_id]
 
 # ---------- CLIENTS ----------
-# Bot (Pyrogram)
+# Bot
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# 🔥 Telethon User Clients
+# 🔥 Pyrogram User Clients
 user_clients = []
 for i, s in enumerate(SESSION_STRINGS):
     s = s.strip()
     if s:
         try:
-            client = TelegramClient(StringSession(s), API_ID, API_HASH)
+            client = Client(f"user_{i}", api_id=API_ID, api_hash=API_HASH, session_string=s)
             user_clients.append({
                 "name": f"Account_{i+1}",
                 "client": client
@@ -83,14 +81,19 @@ async def spam_worker():
                 if config["is_running"] and config["selected_group"] and user_clients:
                     for user in user_clients:
                         try:
-                            if not user["client"].is_connected():
-                                await user["client"].connect()
                             await user["client"].send_message(config["selected_group"], config["message"])
                             print(f"[+] {user['name']}: Message sent")
-                        except FloodWaitError as e:
-                            wait = e.seconds + 10
+                        except FloodWait as e:
+                            wait = e.value + 10
                             print(f"[!] Flood wait! {wait}s")
                             await asyncio.sleep(wait)
+                        except UserNotParticipant:
+                            print(f"[!] Not in group, trying to join...")
+                            try:
+                                await user["client"].join_chat(config["selected_group"])
+                                print(f"[+] Joined group!")
+                            except:
+                                pass
                         except Exception as e:
                             print(f"[-] Error: {e}")
                         await asyncio.sleep(2)
@@ -144,22 +147,22 @@ async def groups_cmd(client, message):
     config = get_config(user_id)
     
     if not user_clients:
-        await message.reply_text("❌ No accounts connected!\nCheck SESSION_STRINGS in environment variables.")
+        await message.reply_text("❌ No accounts connected!\nCheck SESSION_STRINGS.")
         return
     
     try:
-        # 🔥 Account connect karo agar connected nahi hai
-        if not user_clients[0]["client"].is_connected():
-            await message.reply_text("⏳ Connecting to Telegram... Please wait 10 seconds and try again!")
+        # 🔥 Check connection
+        if not user_clients[0]["client"].is_connected:
+            await message.reply_text("⏳ Connecting... Please wait 5 seconds!")
             return
         
         groups = []
-        async for dialog in user_clients[0]["client"].iter_dialogs():
-            if dialog.is_group or dialog.is_channel:
+        async for dialog in user_clients[0]["client"].get_dialogs():
+            if dialog.chat.type in ["group", "supergroup", "channel"]:
                 groups.append({
-                    "id": dialog.id,
-                    "title": dialog.name,
-                    "username": dialog.entity.username
+                    "id": dialog.chat.id,
+                    "title": dialog.chat.title,
+                    "username": dialog.chat.username
                 })
         
         if not groups:
@@ -198,7 +201,7 @@ async def callback(cq):
                 f"Use `/start_spam` to start spamming!"
             )
         except Exception as e:
-            await cq.answer(f"❌ Error: {str(e)[:50]}")
+            await cq.answer(f"❌ Error")
 
 @bot.on_message(filters.command("addgroup"))
 async def addgroup_cmd(client, message):
@@ -264,16 +267,14 @@ async def status_cmd(client, message):
     user_id = message.from_user.id
     config = get_config(user_id)
     
-    # 🔥 Check connection status
     connected = 0
     for c in user_clients:
         try:
-            if c["client"].is_connected():
+            if c["client"].is_connected:
                 connected += 1
         except:
             pass
     
-    # 🔥 If no accounts connected, show warning
     status_text = (
         f"📊 **Status**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -288,7 +289,7 @@ async def status_cmd(client, message):
     )
     
     if connected == 0:
-        status_text += "\n\n⚠️ **No accounts connected!**\nCheck SESSION_STRINGS in environment variables."
+        status_text += "\n\n⚠️ **No accounts connected!**\nCheck SESSION_STRINGS."
     
     await message.reply_text(status_text)
 

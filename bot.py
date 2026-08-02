@@ -6,7 +6,7 @@ import time
 from flask import Flask
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession  # ✅ Sahi import
+from telethon.sessions import StringSession
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -60,15 +60,19 @@ def get_config(user_id):
 # Bot (Pyrogram)
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# 🔥 Telethon User Clients - StringSession
+# 🔥 Telethon User Clients
 user_clients = []
 for i, s in enumerate(SESSION_STRINGS):
     s = s.strip()
     if s:
-        user_clients.append({
-            "name": f"Account_{i+1}",
-            "client": TelegramClient(StringSession(s), API_ID, API_HASH)
-        })
+        try:
+            user_clients.append({
+                "name": f"Account_{i+1}",
+                "client": TelegramClient(StringSession(s), API_ID, API_HASH)
+            })
+            print(f"[+] Account_{i+1} initialized")
+        except Exception as e:
+            print(f"[-] Account_{i+1} init error: {e}")
 
 # ---------- SPAM WORKER ----------
 async def spam_worker():
@@ -122,7 +126,7 @@ async def start_cmd(client, message):
         "/listgroups - List added groups\n"
         "/cleargroups - Clear all groups\n"
         "/setmsg text - Set message\n"
-        "/settime 30 - Set interval (min 10s)\n"
+        "/settime 30 - Set interval\n"
         "/start_spam - Start spamming\n"
         "/stop_spam - Stop spamming\n"
         "/status - Check status"
@@ -138,6 +142,7 @@ async def groups_cmd(client, message):
         return
     
     try:
+        # Check connection
         if not user_clients[0]["client"].is_connected():
             await message.reply_text("⏳ Connecting... Please wait 5 seconds!")
             return
@@ -163,7 +168,7 @@ async def groups_cmd(client, message):
         await message.reply_text(
             f"📋 **Your Groups ({len(groups)})**\n"
             f"Click to select a group:\n"
-            f"Currently selected: `{config['selected_group'] or 'None'}`",
+            f"Selected: `{config['selected_group'] or 'None'}`",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
     except Exception as e:

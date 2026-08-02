@@ -2,32 +2,10 @@ import asyncio
 import os
 import threading
 import sys
-import shutil
 from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, UserNotParticipant
-
-# ---------- 🔥 CACHE CLEAR ON START ----------
-def clear_cache():
-    try:
-        for file in os.listdir('.'):
-            if file.endswith('.session') or file.endswith('.session-journal'):
-                os.remove(file)
-                print(f"[+] Deleted: {file}")
-        
-        storage_path = '.venv/lib/python3.11/site-packages/pyrogram/storage/'
-        if os.path.exists(storage_path):
-            for file in os.listdir(storage_path):
-                if file.endswith('.db') or file.endswith('.db-journal'):
-                    os.remove(os.path.join(storage_path, file))
-                    print(f"[+] Deleted storage: {file}")
-    except Exception as e:
-        print(f"[-] Cache clear error: {e}")
-
-print("🗑️ Clearing cache...")
-clear_cache()
-print("✅ Cache cleared!")
-# ------------------------------------------------
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 if sys.version_info >= (3, 14):
     try:
@@ -46,6 +24,7 @@ SESSION_STRINGS = os.getenv("SESSION_STRINGS", "").split(',')
 
 server = Flask(__name__)
 
+# 🔥 Per-user config
 user_configs = {}
 
 def get_user_config(user_id):
@@ -54,7 +33,8 @@ def get_user_config(user_id):
             "groups": [],
             "message": "Hello from Userbot! 🚀",
             "interval": 30,
-            "is_running": False
+            "is_running": False,
+            "selected_group": None
         }
     return user_configs[user_id]
 
@@ -80,43 +60,30 @@ def parse_group(group_input):
         group_input = f"@{group_input}"
     return group_input
 
+# ---------- SPAM WORKER ----------
 async def spam_worker():
     while True:
         for user_id, config in user_configs.items():
-            if config["is_running"] and config["groups"] and user_clients:
-                for group in config["groups"]:
-                    for user in user_clients:
+            if config["is_running"] and config["selected_group"] and user_clients:
+                group = config["selected_group"]
+                for user in user_clients:
+                    try:
+                        await user["client"].send_message(group, config["message"])
+                        print(f"[+] {user['name']}: Message sent to {group}")
+                    except FloodWait as e:
+                        wait = e.value + 10
+                        print(f"[!] Flood wait! {wait}s")
+                        await asyncio.sleep(wait)
+                    except UserNotParticipant:
+                        print(f"[!] Not in group: {group}")
                         try:
-                            # 🔥 Force refresh
-                            try:
-                                await user["client"].get_chat(group)
-                            except:
-                                pass
-                            
-                            await user["client"].send_message(group, config["message"])
-                            print(f"[+] {user['name']}: Message sent to {group}")
-                        except FloodWait as e:
-                            wait = e.value + 10
-                            print(f"[!] Flood wait! {wait}s")
-                            await asyncio.sleep(wait)
-                        except UserNotParticipant:
-                            print(f"[!] Not in group: {group}")
-                            try:
-                                await user["client"].join_chat(group)
-                                print(f"[+] Joined: {group}")
-                            except:
-                                pass
-                        except ValueError as e:
-                            if "Peer id invalid" in str(e):
-                                print(f"[!] Invalid peer, refreshing...")
-                                try:
-                                    await user["client"].get_chat(group)
-                                except:
-                                    pass
-                        except Exception as e:
-                            print(f"[-] Error: {e}")
-                        await asyncio.sleep(2)
-                    await asyncio.sleep(3)
+                            await user["client"].join_chat(group)
+                            print(f"[+] Joined: {group}")
+                        except:
+                            pass
+                    except Exception as e:
+                        print(f"[-] Error: {e}")
+                    await asyncio.sleep(2)
                 await asyncio.sleep(config["interval"])
         await asyncio.sleep(1)
 
@@ -132,10 +99,10 @@ async def start_command(client, message):
         f"📊 Groups: `{len(config['groups'])}`\n"
         f"👤 Accounts: `{len(user_clients)}`\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "/addgroup @username - Add group\n"
-        "/addgroup t.me/group - Add by link\n"
+        "/groups - See all joined groups\n"
+        "/addgroup @username - Add by username\n"
         "/removegroup @username - Remove group\n"
-        "/listgroups - Show all groups\n"
+        "/listgroups - Show added groups\n"
         "/cleargroups - Remove all groups\n"
         "/setmsg Your text - Set message\n"
         "/settime 30 - Set interval\n"
@@ -145,6 +112,73 @@ async def start_command(client, message):
     )
     await message.reply_text(help_text)
 
+# 🔥 NEW: Show all joined groups
+@bot.on_message(filters.command("groups"))
+async def show_groups(client, message):
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
+    if not user_clients:
+        await message.reply_text("❌ No accounts connected!")
+        return
+    
+    try:
+        # 🔥 Pehle account se groups fetch karo
+        groups = []
+        async for dialog in user_clients[0]["client"].get_dialogs():
+            if dialog.chat.type in ["group", "supergroup", "channel"]:
+                groups.append({
+                    "id": dialog.chat.id,
+                    "title": dialog.chat.title,
+                    "username": dialog.chat.username
+                })
+        
+        if not groups:
+            await message.reply_text("📭 No groups found!")
+            return
+        
+        # 🔥 Buttons banao - har group ke liye
+        buttons = []
+        for group in groups[:50]:  # Max 50 groups
+            display_name = group["title"][:30] if group["title"] else group["username"] or str(group["id"])
+            callback_data = f"select_{group['id']}"
+            buttons.append([InlineKeyboardButton(f"📌 {display_name}", callback_data=callback_data)])
+        
+        # Add to config buttons
+        await message.reply_text(
+            f"📋 **Your Groups ({len(groups)})**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Click on a group to select it for spamming!\n\n"
+            f"Currently selected: `{config['selected_group'] or 'None'}`",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {e}")
+
+# 🔥 Callback handler for group selection
+@bot.on_callback_query()
+async def callback_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    config = get_user_config(user_id)
+    
+    if callback_query.data.startswith("select_"):
+        group_id = int(callback_query.data.split("_")[1])
+        
+        # 🔥 Group select karo
+        config["selected_group"] = group_id
+        config["groups"].append(group_id) if group_id not in config["groups"] else None
+        
+        await callback_query.answer(f"✅ Group selected!")
+        await callback_query.edit_message_text(
+            f"✅ **Group Selected!**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Group ID: `{group_id}`\n\n"
+            f"Now use `/start_spam` to start spamming!\n"
+            f"Currently selected: `{group_id}`"
+        )
+
+# 🔥 Add group manually (username, ID, link)
 @bot.on_message(filters.command("addgroup"))
 async def add_group(client, message):
     user_id = message.from_user.id
@@ -156,7 +190,13 @@ async def add_group(client, message):
             await message.reply_text(f"⚠️ Already added: `{group}`")
             return
         config["groups"].append(group)
-        await message.reply_text(f"✅ **Group Added!**\n📌 `{group}`\n📊 Total: `{len(config['groups'])}`")
+        config["selected_group"] = group
+        await message.reply_text(
+            f"✅ **Group Added!**\n"
+            f"📌 `{group}`\n"
+            f"📊 Total: `{len(config['groups'])}`\n"
+            f"Selected: `{group}`"
+        )
     except:
         await message.reply_text("❌ /addgroup @username or /addgroup t.me/group")
 
@@ -171,6 +211,8 @@ async def remove_group(client, message):
             await message.reply_text(f"❌ Not found: `{group}`")
             return
         config["groups"].remove(group)
+        if config["selected_group"] == group:
+            config["selected_group"] = None
         await message.reply_text(f"✅ Removed: `{group}`\n📊 Total: `{len(config['groups'])}`")
     except:
         await message.reply_text("❌ /removegroup @username")
@@ -183,7 +225,10 @@ async def list_groups(client, message):
         await message.reply_text("📭 **No groups added!**")
         return
     groups_list = "\n".join([f"• {i+1}. `{g}`" for i, g in enumerate(config["groups"])])
-    await message.reply_text(f"📋 **Your Groups ({len(config['groups'])}):**\n\n{groups_list}")
+    await message.reply_text(
+        f"📋 **Your Groups ({len(config['groups'])}):**\n\n{groups_list}\n\n"
+        f"Currently selected: `{config['selected_group'] or 'None'}`"
+    )
 
 @bot.on_message(filters.command("cleargroups"))
 async def clear_groups(client, message):
@@ -191,6 +236,7 @@ async def clear_groups(client, message):
     config = get_user_config(user_id)
     count = len(config["groups"])
     config["groups"] = []
+    config["selected_group"] = None
     await message.reply_text(f"🗑️ **Removed all {count} groups!**")
 
 @bot.on_message(filters.command("setmsg"))
@@ -227,6 +273,7 @@ async def status(client, message):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"User ID: `{user_id}`\n"
         f"Groups: `{len(config['groups'])}`\n"
+        f"Selected Group: `{config['selected_group'] or 'None'}`\n"
         f"Message: `{config['message']}`\n"
         f"Interval: `{config['interval']}s`\n"
         f"Running: `{'✅ YES' if config['is_running'] else '❌ NO'}`\n"
@@ -237,19 +284,24 @@ async def status(client, message):
 async def start_spam(client, message):
     user_id = message.from_user.id
     config = get_user_config(user_id)
-    if not config["groups"]:
-        await message.reply_text("❌ **No groups!** Use `/addgroup`")
+    
+    if not config["selected_group"]:
+        await message.reply_text("❌ **No group selected!**\nUse `/groups` to select a group.")
         return
+    
     if not user_clients:
         await message.reply_text("❌ **No accounts!**")
         return
+    
     if not config["is_running"]:
         config["is_running"] = True
         await message.reply_text(
             f"🚀 **Spamming Started!**\n"
-            f"📊 Groups: `{len(config['groups'])}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 Group: `{config['selected_group']}`\n"
             f"👤 Accounts: `{len(user_clients)}`\n"
-            f"⏱️ Interval: `{config['interval']}s`"
+            f"⏱️ Interval: `{config['interval']}s`\n"
+            f"💬 Message: `{config['message']}`"
         )
     else:
         await message.reply_text("⚠️ **Already running!**")
@@ -272,6 +324,7 @@ async def main():
     print("🤖 Starting bot...")
     await bot.start()
     print("✅ Bot started!")
+    
     print("👤 Starting user accounts...")
     for user in user_clients:
         try:
@@ -279,8 +332,10 @@ async def main():
             print(f"✅ {user['name']}: Started successfully!")
         except Exception as e:
             print(f"❌ {user['name']}: Failed - {e}")
+    
     print(f"📊 Total accounts: {len(user_clients)}")
     asyncio.create_task(spam_worker())
+    
     while True:
         await asyncio.sleep(1)
 

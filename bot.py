@@ -82,7 +82,7 @@ async def spam_worker():
                     for user in user_clients:
                         try:
                             await user["client"].send_message(config["selected_group"], config["message"])
-                            print(f"[+] {user['name']}: Message sent")
+                            print(f"[+] {user['name']}: Message sent to {config['selected_group']}")
                         except FloodWait as e:
                             wait = e.value + 10
                             print(f"[!] Flood wait! {wait}s")
@@ -92,8 +92,8 @@ async def spam_worker():
                             try:
                                 await user["client"].join_chat(config["selected_group"])
                                 print(f"[+] Joined group!")
-                            except:
-                                pass
+                            except Exception as e:
+                                print(f"[-] Cannot join: {e}")
                         except Exception as e:
                             print(f"[-] Error: {e}")
                         await asyncio.sleep(2)
@@ -135,7 +135,7 @@ async def start_cmd(client, message):
         "/listgroups - List added groups\n"
         "/cleargroups - Clear all groups\n"
         "/setmsg text - Set message\n"
-        "/settime 30 - Set interval\n"
+        "/settime 30 - Set interval (min 10s)\n"
         "/start_spam - Start spamming\n"
         "/stop_spam - Stop spamming\n"
         "/status - Check status"
@@ -151,7 +151,6 @@ async def groups_cmd(client, message):
         return
     
     try:
-        # 🔥 Check connection
         if not user_clients[0]["client"].is_connected:
             await message.reply_text("⏳ Connecting... Please wait 5 seconds!")
             return
@@ -216,7 +215,7 @@ async def addgroup_cmd(client, message):
         config["selected_group"] = g
         await message.reply_text(f"✅ **Group Added!**\n📌 `{g}`")
     except:
-        await message.reply_text("❌ /addgroup @username")
+        await message.reply_text("❌ /addgroup @username or /addgroup t.me/group")
 
 @bot.on_message(filters.command("listgroups"))
 async def listgroups_cmd(client, message):
@@ -289,7 +288,7 @@ async def status_cmd(client, message):
     )
     
     if connected == 0:
-        status_text += "\n\n⚠️ **No accounts connected!**\nCheck SESSION_STRINGS."
+        status_text += "\n\n⚠️ **No accounts connected!**\nCheck SESSION_STRINGS in environment variables."
     
     await message.reply_text(status_text)
 

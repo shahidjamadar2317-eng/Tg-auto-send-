@@ -6,7 +6,7 @@ import time
 from flask import Flask
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession
+from telethon.sessions import StringSession  # ✅ Sahi import
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -60,7 +60,7 @@ def get_config(user_id):
 # Bot (Pyrogram)
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# 🔥 Telethon User Clients - StringSession use karo
+# 🔥 Telethon User Clients - StringSession
 user_clients = []
 for i, s in enumerate(SESSION_STRINGS):
     s = s.strip()
@@ -152,7 +152,7 @@ async def groups_cmd(client, message):
                 })
         
         if not groups:
-            await message.reply_text("📭 No groups found!")
+            await message.reply_text("📭 No groups found!\nMake sure accounts are joined to groups.")
             return
         
         buttons = []
@@ -163,7 +163,7 @@ async def groups_cmd(client, message):
         await message.reply_text(
             f"📋 **Your Groups ({len(groups)})**\n"
             f"Click to select a group:\n"
-            f"Selected: `{config['selected_group'] or 'None'}`",
+            f"Currently selected: `{config['selected_group'] or 'None'}`",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
     except Exception as e:

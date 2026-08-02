@@ -6,7 +6,6 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, UserNotParticipant
 
-# ---------- PYTHON 3.14 FIX ----------
 if sys.version_info >= (3, 14):
     try:
         asyncio.get_running_loop()
@@ -17,39 +16,38 @@ else:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-# ---------- ENV VARIABLES ----------
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-
-# 🔥 Multiple Sessions (comma separated)
 SESSION_STRINGS = os.getenv("SESSION_STRINGS", "").split(',')
 
-# Flask app
 server = Flask(__name__)
 
-# ---------- CONFIG ----------
-spam_config = {
-    "groups": [],
-    "message": "Hello from Userbot! 🚀",
-    "interval": 30,
-    "is_running": False
-}
+# 🔥 PER-USER CONFIG - Har user ki alag config
+user_configs = {}
 
-# ---------- CLIENTS ----------
-# Bot
+def get_user_config(user_id):
+    """Har user ke liye alag config"""
+    if user_id not in user_configs:
+        user_configs[user_id] = {
+            "groups": [],
+            "message": "Hello from Userbot! 🚀",
+            "interval": 30,
+            "is_running": False
+        }
+    return user_configs[user_id]
+
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# 🔥 Multiple User Clients (Pyrogram)
 user_clients = []
 for i, session in enumerate(SESSION_STRINGS):
     session = session.strip()
     if session:
-        user_clients.append(
-            Client(f"user_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session)
-        )
+        user_clients.append({
+            "name": f"Account_{i+1}",
+            "client": Client(f"user_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session)
+        })
 
-# ---------- HELPERS ----------
 def parse_group(group_input):
     group_input = group_input.strip()
     if "t.me/" in group_input:
@@ -61,45 +59,46 @@ def parse_group(group_input):
         group_input = f"@{group_input}"
     return group_input
 
-# ---------- SPAM WORKER ----------
 async def spam_worker():
     while True:
-        if spam_config["is_running"] and spam_config["groups"] and user_clients:
-            for group in spam_config["groups"]:
-                for user_client in user_clients:
-                    try:
-                        await user_client.send_message(group, spam_config["message"])
-                        print(f"[+] Message sent to {group}")
-                    except FloodWait as e:
-                        wait = e.value + 10
-                        print(f"[!] Flood wait! {wait}s")
-                        await asyncio.sleep(wait)
-                    except UserNotParticipant:
-                        print(f"[!] Not in group: {group}")
+        # 🔥 Har user ki config check karo
+        for user_id, config in user_configs.items():
+            if config["is_running"] and config["groups"] and user_clients:
+                for group in config["groups"]:
+                    for user in user_clients:
                         try:
-                            await user_client.join_chat(group)
-                            print(f"[+] Joined: {group}")
-                        except:
-                            pass
-                    except Exception as e:
-                        print(f"[-] Error: {e}")
-                    
-                    await asyncio.sleep(2)
-                
-                await asyncio.sleep(3)
-            
-            await asyncio.sleep(spam_config["interval"])
-        else:
-            await asyncio.sleep(1)
+                            await user["client"].send_message(group, config["message"])
+                            print(f"[+] {user['name']}: Message sent to {group} (User: {user_id})")
+                        except FloodWait as e:
+                            wait = e.value + 10
+                            print(f"[!] Flood wait! {wait}s")
+                            await asyncio.sleep(wait)
+                        except UserNotParticipant:
+                            print(f"[!] Not in group: {group}")
+                            try:
+                                await user["client"].join_chat(group)
+                                print(f"[+] Joined: {group}")
+                            except:
+                                pass
+                        except Exception as e:
+                            print(f"[-] Error: {e}")
+                        await asyncio.sleep(2)
+                    await asyncio.sleep(3)
+                await asyncio.sleep(config["interval"])
+        await asyncio.sleep(1)
 
 # ---------- BOT COMMANDS ----------
 @bot.on_message(filters.command(["start", "help"]))
 async def start_command(client, message):
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
     help_text = (
         "🤖 **Userbot Controller**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Your ID: `{user_id}`\n"
+        f"📊 Groups: `{len(config['groups'])}`\n"
         f"👤 Accounts: `{len(user_clients)}`\n"
-        f"📊 Groups: `{len(spam_config['groups'])}`\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📌 **Group Commands:**\n"
         "/addgroup @username - Add by username\n"
@@ -114,25 +113,30 @@ async def start_command(client, message):
         "/settime 30 - Set interval (min 10s)\n"
         "/start_spam - Start spamming\n"
         "/stop_spam - Stop spamming\n"
-        "/status - Check config"
+        "/status - Check config\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔓 Each user has their own config!"
     )
     await message.reply_text(help_text)
 
 @bot.on_message(filters.command("addgroup"))
 async def add_group(client, message):
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
     try:
         group_input = message.text.split(maxsplit=1)[1]
         group = parse_group(group_input)
         
-        if group in spam_config["groups"]:
+        if group in config["groups"]:
             await message.reply_text(f"⚠️ Already added: `{group}`")
             return
         
-        spam_config["groups"].append(group)
+        config["groups"].append(group)
         await message.reply_text(
             f"✅ **Group Added!**\n"
             f"📌 `{group}`\n"
-            f"📊 Total: `{len(spam_config['groups'])}`"
+            f"📊 Total: `{len(config['groups'])}`"
         )
     except:
         await message.reply_text(
@@ -144,71 +148,94 @@ async def add_group(client, message):
 
 @bot.on_message(filters.command("removegroup"))
 async def remove_group(client, message):
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
     try:
         group_input = message.text.split(maxsplit=1)[1]
         group = parse_group(group_input)
         
-        if group not in spam_config["groups"]:
+        if group not in config["groups"]:
             await message.reply_text(f"❌ Not found: `{group}`")
             return
         
-        spam_config["groups"].remove(group)
-        await message.reply_text(f"✅ Removed: `{group}`\n📊 Total: `{len(spam_config['groups'])}`")
+        config["groups"].remove(group)
+        await message.reply_text(f"✅ Removed: `{group}`\n📊 Total: `{len(config['groups'])}`")
     except:
         await message.reply_text("❌ /removegroup @username")
 
 @bot.on_message(filters.command("listgroups"))
 async def list_groups(client, message):
-    if not spam_config["groups"]:
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
+    if not config["groups"]:
         await message.reply_text("📭 **No groups added!**")
         return
     
-    groups_list = "\n".join([f"• {i+1}. `{g}`" for i, g in enumerate(spam_config["groups"])])
-    await message.reply_text(f"📋 **Groups ({len(spam_config['groups'])}):**\n\n{groups_list}")
+    groups_list = "\n".join([f"• {i+1}. `{g}`" for i, g in enumerate(config["groups"])])
+    await message.reply_text(f"📋 **Your Groups ({len(config['groups'])}):**\n\n{groups_list}")
 
 @bot.on_message(filters.command("cleargroups"))
 async def clear_groups(client, message):
-    count = len(spam_config["groups"])
-    spam_config["groups"] = []
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
+    count = len(config["groups"])
+    config["groups"] = []
     await message.reply_text(f"🗑️ **Removed all {count} groups!**")
 
 @bot.on_message(filters.command("setmsg"))
 async def set_msg(client, message):
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
     try:
         msg = message.text.split(maxsplit=1)[1]
-        spam_config["message"] = msg
+        config["message"] = msg
         await message.reply_text(f"✅ **Message set:**\n`{msg}`")
     except:
         await message.reply_text("❌ /setmsg Your text here")
 
 @bot.on_message(filters.command("settime"))
 async def set_time(client, message):
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
     try:
         sec = int(message.text.split(maxsplit=1)[1])
         if sec < 10:
             await message.reply_text("⚠️ Minimum 10 seconds required!")
             return
-        spam_config["interval"] = sec
+        config["interval"] = sec
         await message.reply_text(f"✅ **Interval:** `{sec} seconds`")
     except:
         await message.reply_text("❌ /settime 30")
 
 @bot.on_message(filters.command("status"))
 async def status(client, message):
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
     status_text = (
-        f"📊 **Current Status**\n"
+        f"📊 **Your Status**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Accounts: `{len(user_clients)}`\n"
-        f"Groups: `{len(spam_config['groups'])}`\n"
-        f"Message: `{spam_config['message']}`\n"
-        f"Interval: `{spam_config['interval']}s`\n"
-        f"Running: `{'✅ YES' if spam_config['is_running'] else '❌ NO'}`"
+        f"User ID: `{user_id}`\n"
+        f"Groups: `{len(config['groups'])}`\n"
+        f"Message: `{config['message']}`\n"
+        f"Interval: `{config['interval']}s`\n"
+        f"Running: `{'✅ YES' if config['is_running'] else '❌ NO'}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Accounts: `{len(user_clients)}`"
     )
     await message.reply_text(status_text)
 
 @bot.on_message(filters.command("start_spam"))
 async def start_spam(client, message):
-    if not spam_config["groups"]:
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
+    if not config["groups"]:
         await message.reply_text("❌ **No groups!** Use `/addgroup @username`")
         return
     
@@ -216,45 +243,48 @@ async def start_spam(client, message):
         await message.reply_text("❌ **No accounts!** Add SESSION_STRINGS")
         return
     
-    if not spam_config["is_running"]:
-        spam_config["is_running"] = True
+    if not config["is_running"]:
+        config["is_running"] = True
         await message.reply_text(
             f"🚀 **Spamming Started!**\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 Groups: `{len(spam_config['groups'])}`\n"
+            f"📊 Groups: `{len(config['groups'])}`\n"
             f"👤 Accounts: `{len(user_clients)}`\n"
-            f"⏱️ Interval: `{spam_config['interval']}s`\n"
-            f"💬 Message: `{spam_config['message']}`"
+            f"⏱️ Interval: `{config['interval']}s`\n"
+            f"💬 Message: `{config['message']}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🛑 Use `/stop_spam` to stop"
         )
     else:
-        await message.reply_text("⚠️ **Already running!**")
+        await message.reply_text("⚠️ **Already running for you!**")
 
 @bot.on_message(filters.command("stop_spam"))
 async def stop_spam(client, message):
-    if spam_config["is_running"]:
-        spam_config["is_running"] = False
-        await message.reply_text("🛑 **Spamming Stopped!**")
+    user_id = message.from_user.id
+    config = get_user_config(user_id)
+    
+    if config["is_running"]:
+        config["is_running"] = False
+        await message.reply_text("🛑 **Spamming Stopped for you!**")
     else:
-        await message.reply_text("⚠️ **Not running!**")
+        await message.reply_text("⚠️ **Not running for you!**")
 
-# ---------- FLASK ----------
 @server.route('/')
 def home():
     return "Userbot is running! 🚀", 200
 
-# ---------- MAIN ----------
 async def main():
     print("🤖 Starting bot...")
     await bot.start()
     print("✅ Bot started!")
     
     print("👤 Starting user accounts...")
-    for client in user_clients:
+    for user in user_clients:
         try:
-            await client.start()
-            print("✅ User account started!")
+            await user["client"].start()
+            print(f"✅ {user['name']}: Started successfully!")
         except Exception as e:
-            print(f"❌ Failed: {e}")
+            print(f"❌ {user['name']}: Failed - {e}")
     
     print(f"📊 Total accounts: {len(user_clients)}")
     asyncio.create_task(spam_worker())

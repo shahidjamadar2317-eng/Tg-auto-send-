@@ -66,31 +66,37 @@ for i, s in enumerate(SESSION_STRINGS):
     s = s.strip()
     if s:
         try:
+            client = TelegramClient(StringSession(s), API_ID, API_HASH)
             user_clients.append({
                 "name": f"Account_{i+1}",
-                "client": TelegramClient(StringSession(s), API_ID, API_HASH)
+                "client": client
             })
-            print(f"[+] Account_{i+1} initialized")
+            print(f"✅ Account_{i+1} initialized")
         except Exception as e:
-            print(f"[-] Account_{i+1} init error: {e}")
+            print(f"❌ Account_{i+1} init error: {e}")
 
 # ---------- SPAM WORKER ----------
 async def spam_worker():
     while True:
-        for user_id, config in user_configs.items():
-            if config["is_running"] and config["selected_group"] and user_clients:
-                for user in user_clients:
-                    try:
-                        await user["client"].send_message(config["selected_group"], config["message"])
-                        print(f"[+] {user['name']}: Message sent")
-                    except FloodWaitError as e:
-                        wait = e.seconds + 10
-                        print(f"[!] Flood wait! {wait}s")
-                        await asyncio.sleep(wait)
-                    except Exception as e:
-                        print(f"[-] Error: {e}")
-                    await asyncio.sleep(2)
-                await asyncio.sleep(config["interval"])
+        try:
+            for user_id, config in user_configs.items():
+                if config["is_running"] and config["selected_group"] and user_clients:
+                    for user in user_clients:
+                        try:
+                            if not user["client"].is_connected():
+                                await user["client"].connect()
+                            await user["client"].send_message(config["selected_group"], config["message"])
+                            print(f"[+] {user['name']}: Message sent")
+                        except FloodWaitError as e:
+                            wait = e.seconds + 10
+                            print(f"[!] Flood wait! {wait}s")
+                            await asyncio.sleep(wait)
+                        except Exception as e:
+                            print(f"[-] Error: {e}")
+                        await asyncio.sleep(2)
+                    await asyncio.sleep(config["interval"])
+        except Exception as e:
+            print(f"[-] Spam worker error: {e}")
         await asyncio.sleep(1)
 
 # ---------- KEEP ALIVE ----------
@@ -138,13 +144,13 @@ async def groups_cmd(client, message):
     config = get_config(user_id)
     
     if not user_clients:
-        await message.reply_text("❌ No accounts connected!")
+        await message.reply_text("❌ No accounts connected!\nCheck SESSION_STRINGS in environment variables.")
         return
     
     try:
-        # Check connection
+        # 🔥 Account connect karo agar connected nahi hai
         if not user_clients[0]["client"].is_connected():
-            await message.reply_text("⏳ Connecting... Please wait 5 seconds!")
+            await message.reply_text("⏳ Connecting to Telegram... Please wait 10 seconds and try again!")
             return
         
         groups = []
@@ -180,16 +186,19 @@ async def callback(cq):
     config = get_config(user_id)
     
     if cq.data.startswith("sel_"):
-        group_id = int(cq.data.split("_")[1])
-        config["selected_group"] = group_id
-        if group_id not in config["groups"]:
-            config["groups"].append(group_id)
-        await cq.answer("✅ Group Selected!")
-        await cq.edit_message_text(
-            f"✅ **Group Selected!**\n"
-            f"ID: `{group_id}`\n\n"
-            f"Use `/start_spam` to start spamming!"
-        )
+        try:
+            group_id = int(cq.data.split("_")[1])
+            config["selected_group"] = group_id
+            if group_id not in config["groups"]:
+                config["groups"].append(group_id)
+            await cq.answer("✅ Group Selected!")
+            await cq.edit_message_text(
+                f"✅ **Group Selected!**\n"
+                f"ID: `{group_id}`\n\n"
+                f"Use `/start_spam` to start spamming!"
+            )
+        except Exception as e:
+            await cq.answer(f"❌ Error: {str(e)[:50]}")
 
 @bot.on_message(filters.command("addgroup"))
 async def addgroup_cmd(client, message):
@@ -254,9 +263,18 @@ async def settime_cmd(client, message):
 async def status_cmd(client, message):
     user_id = message.from_user.id
     config = get_config(user_id)
-    started = sum(1 for c in user_clients if c["client"].is_connected())
     
-    await message.reply_text(
+    # 🔥 Check connection status
+    connected = 0
+    for c in user_clients:
+        try:
+            if c["client"].is_connected():
+                connected += 1
+        except:
+            pass
+    
+    # 🔥 If no accounts connected, show warning
+    status_text = (
         f"📊 **Status**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"User ID: `{user_id}`\n"
@@ -265,8 +283,14 @@ async def status_cmd(client, message):
         f"Message: `{config['message'][:30]}{'...' if len(config['message']) > 30 else ''}`\n"
         f"Interval: `{config['interval']}s`\n"
         f"Running: `{'✅ YES' if config['is_running'] else '❌ NO'}`\n"
-        f"Accounts Connected: `{started}/{len(user_clients)}`"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Accounts Connected: `{connected}/{len(user_clients)}`"
     )
+    
+    if connected == 0:
+        status_text += "\n\n⚠️ **No accounts connected!**\nCheck SESSION_STRINGS in environment variables."
+    
+    await message.reply_text(status_text)
 
 @bot.on_message(filters.command("start_spam"))
 async def start_spam_cmd(client, message):
@@ -278,7 +302,7 @@ async def start_spam_cmd(client, message):
         return
     
     if not user_clients:
-        await message.reply_text("❌ **No accounts!**")
+        await message.reply_text("❌ **No accounts!**\nCheck SESSION_STRINGS.")
         return
     
     if not config["is_running"]:

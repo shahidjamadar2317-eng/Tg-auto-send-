@@ -6,6 +6,7 @@ import time
 from flask import Flask
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
+from telethon.sessions import StringSession
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -59,14 +60,14 @@ def get_config(user_id):
 # Bot (Pyrogram)
 bot = Client("control_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Telethon User Clients
+# 🔥 Telethon User Clients - StringSession use karo
 user_clients = []
 for i, s in enumerate(SESSION_STRINGS):
     s = s.strip()
     if s:
         user_clients.append({
             "name": f"Account_{i+1}",
-            "client": TelegramClient(s, API_ID, API_HASH)
+            "client": TelegramClient(StringSession(s), API_ID, API_HASH)
         })
 
 # ---------- SPAM WORKER ----------
@@ -77,7 +78,7 @@ async def spam_worker():
                 for user in user_clients:
                     try:
                         await user["client"].send_message(config["selected_group"], config["message"])
-                        print(f"[+] {user['name']}: Message sent to {config['selected_group']}")
+                        print(f"[+] {user['name']}: Message sent")
                     except FloodWaitError as e:
                         wait = e.seconds + 10
                         print(f"[!] Flood wait! {wait}s")
@@ -90,15 +91,18 @@ async def spam_worker():
 
 # ---------- KEEP ALIVE ----------
 def keep_alive():
-    url = os.getenv("RENDER_EXTERNAL_URL", "https://tg-auto-send-1.onrender.com")
-    while True:
-        try:
-            import requests
-            requests.get(url)
-            print("[+] Keep alive ping sent")
-        except:
-            pass
-        time.sleep(300)
+    try:
+        import requests
+        url = os.getenv("RENDER_EXTERNAL_URL", "https://tg-auto-send-1.onrender.com")
+        while True:
+            try:
+                requests.get(url)
+                print("[+] Keep alive ping sent")
+            except:
+                pass
+            time.sleep(300)
+    except:
+        pass
 
 # ---------- BOT COMMANDS ----------
 @bot.on_message(filters.command(["start", "help"]))
@@ -148,7 +152,7 @@ async def groups_cmd(client, message):
                 })
         
         if not groups:
-            await message.reply_text("📭 No groups found!\nMake sure accounts are joined to groups.")
+            await message.reply_text("📭 No groups found!")
             return
         
         buttons = []
@@ -159,7 +163,7 @@ async def groups_cmd(client, message):
         await message.reply_text(
             f"📋 **Your Groups ({len(groups)})**\n"
             f"Click to select a group:\n"
-            f"Currently selected: `{config['selected_group'] or 'None'}`",
+            f"Selected: `{config['selected_group'] or 'None'}`",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
     except Exception as e:
@@ -269,7 +273,7 @@ async def start_spam_cmd(client, message):
         return
     
     if not user_clients:
-        await message.reply_text("❌ **No accounts!**\nAdd SESSION_STRINGS in environment variables.")
+        await message.reply_text("❌ **No accounts!**")
         return
     
     if not config["is_running"]:
@@ -335,11 +339,13 @@ def run_flask():
 
 # ---------- ENTRY POINT ----------
 if __name__ == "__main__":
-    # Flask thread
     threading.Thread(target=run_flask, daemon=True).start()
     
-    # Keep alive thread
-    threading.Thread(target=keep_alive, daemon=True).start()
+    try:
+        import requests
+        threading.Thread(target=keep_alive, daemon=True).start()
+    except:
+        pass
     
     try:
         loop.run_until_complete(main())
